@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-03",
+  "label": "locally_observed",
+  "runtime_version": {
+    "status": "available",
+    "version": "codex-cli 0.160.0",
+    "boundary": "disposable_snapshot_only"
+  },
+  "fixture_before": "64fdeee3237d8e993abf449336c6dc12a61fb35b549a9ea8d4d1d59b042473cc",
+  "fixture_after": "64fdeee3237d8e993abf449336c6dc12a61fb35b549a9ea8d4d1d59b042473cc",
+  "writes_prevented": "unknown",
+  "event_types": [
+    "thread.started",
+    "turn.started",
+    "item.completed",
+    "turn.completed"
+  ],
+  "checkpoint": {
+    "schema_version": "1",
+    "provenance": "relay_observed",
+    "execution_id": "2169152a-f7ed-4b10-821d-93db621d342a",
+    "process_id": null,
+    "session_ref": null,
+    "artifact_refs": [
+      "sha256:29c96fed23ac5f58ada69dd426b2a3902d11012a4b38d69d90ace158ac73df41"
+    ],
+    "fixture_hash": "64fdeee3237d8e993abf449336c6dc12a61fb35b549a9ea8d4d1d59b042473cc",
+    "observed_usage": {
+      "input_tokens": 11540,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 184,
+      "reasoning_output_tokens": 39
+    }
+  },
+  "artifact": {
+    "schema_version": "1",
+    "artifact_id": "sha256:29c96fed23ac5f58ada69dd426b2a3902d11012a4b38d69d90ace158ac73df41",
+    "content_hash": "29c96fed23ac5f58ada69dd426b2a3902d11012a4b38d69d90ace158ac73df41",
+    "result": {
+      "schema_version": "1",
+      "execution_id": "2169152a-f7ed-4b10-821d-93db621d342a",
+      "task_id": "smoke-1",
+      "status": "completed",
+      "summary": "Reversed bounds silently return the upper bound for ordinary ordered numbers.",
+      "findings": [
+        {
+          "schema_version": "1",
+          "text": "When lower > upper, max(lower, value) is at least lower, so min(upper, ...) returns upper regardless of value.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 clamp implementation and interval docstring.",
+            "README.md:1-2 \u2014 documented behavior and reversed-bounds investigation request."
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "No bound validation exists. For example, clamp(5, lower=10, upper=0) returns 0 by inspection, outside the documented interval interpretation.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 clamp implementation and interval docstring.",
+            "README.md:1-2 \u2014 documented behavior and reversed-bounds investigation request."
+          ],
+          "provenance": "worker_reported"
+        }
+      ],
+      "unresolved": [
+        "Should reversed bounds raise an error, be swapped, or intentionally return upper?"
+      ],
+      "evidence_refs": []
+    }
+  }
+}
