@@ -1,7 +1,8 @@
 # M0 adapter feasibility
 
-M0 evidence below is preserved. The M0.1 update at the end supersedes current readiness
-and invocation guidance; historical evidence was not rewritten to imply stronger controls.
+M0 and M0.1 evidence below are preserved as historical observations. The correction update
+at the end supersedes control declarations and interface behavior. Historical evidence
+was not rewritten to imply stronger controls.
 
 Observation date: **2026-10-03**, owner timezone Asia/Bangkok. Windows/PowerShell,
 Python 3.13.7. Repository initially contained only `.git`, no commits, docs, package,
@@ -185,3 +186,57 @@ The documented conformance probe command succeeded with zero inference calls and
 Codex subscription authenticated, Claude unavailable, and both ordinary admission gates blocked.
 Tests include the safe Claude argument/stdin construction and API-key environment removal;
 these are synthetic dispatch assertions, not observed Claude inference.
+
+## M0.1 correction pass (2026-10-03)
+
+Based on review of `ba36c2764034ee9f5b3291a54f858c82804fe453`, with no subsequent code
+changes and a clean initial tree. Branch `codex/m0-1-corrections`. No applicable AGENTS.md.
+No inference, login, credential inspection, paid fallback, push or global changes. The
+existing evidence JSON files are unchanged; this pass does not revalidate runtime integration.
+
+| Review finding | Corrected behavior | Verification basis |
+|---|---|---|
+| Routing and dispatch differed | One shared mode/capability/tool/control check; weaker experiments waive only controls | Synthetic agreement and runner-not-reached regressions |
+| Partial agent text could complete | Only item.completed agent messages qualify, exactly one before a single turn.completed | Synthetic lifecycle streams, including incomplete intermediate text and failures |
+| Public cancel disconnected | Explicit unsupported API sends no request; timeout runner owns cleanup | API assertions plus harmless real Python subprocess tests |
+| Malformed Claude auth crashed/false qualified | Validate exit statuses, pinned version, object shape, typed loggedIn/authMethod/apiProvider; first-party subscription only | Mocked probe results; no actual provider inference |
+| Documentation prematurely qualified Claude controls | All required controls unknown; separate interface_support/runtime_version/validation_basis | Synthetic profile matrix; no qualification promoted from docs or refusal |
+
+**Current declaration correction:** the earlier M0.1 matrix/evidence describes the old
+declarations. Its Claude `supported_enforced` values are withdrawn as qualification evidence.
+Both current runtime profiles now declare every required snapshot control `unknown`, with
+documented interface support recorded separately where the inspected version has it. Controls
+identify runtime version and source; the validation basis explicitly states the absence of
+combined-path enforcement validation and whether auth probe evidence was present. No registry
+of passed runtime validations exists. Unknown versions have unknown interface support and never
+inherit enforcement. Resolving one control cannot implicitly qualify the others.
+
+Task/profile eligibility is not a scheduler authorization: it covers modes, required capabilities,
+tools and controls only. Pool observations, expiry, reserves and ranking stay in routing.
+Dispatch rejects incompatible capabilities/modes/tools even under weaker_experiment=True.
+
+Codex lifecycle policy is conservative: exactly one completed agent-message item before exactly
+one completed turn, no failure events, valid final JSON and a successful process exit. Started
+or updated message content may be incomplete JSON and is ignored. Multiple completed messages
+are ambiguous and rejected, even if identical. No undocumented provider fields were introduced.
+
+Cancellation choice B: public cancel is unsupported and exposes no process handle. It reports
+no cancellation request and no observed parent exit. Timeout cleanup reports whether a request
+was made and whether the parent actually exited; tree and remote state remain unknown. Failure
+to observe parent exit returns failed rather than cancelled. Errors in taskkill/kill/wait paths
+are sanitized and bounded; Windows cleanup has at most three waits of five seconds. Temporary
+stdin/stdout files avoid blocking pipe-reader cleanup; stderr is discarded and normalized output
+is capped at 1 MiB. A failed stop can leave a process alive; no remote cancellation or zero-use
+claim follows. A normal parent exit does not prove all descendants exited.
+
+The correction suite adds 56 regression cases to the existing 37. Final validation is recorded
+below. Actual harmless subprocess checks ran on Windows, including the platform-specific
+parent/child test; provider lifecycle/probe/control tests are synthetic. No Claude inference,
+enforced runtime boundary or real two-worker handoff was established. Remaining gates in
+decision 0002 still apply before ordinary snapshot or repository-access use.
+
+Final correction checks (`locally_observed`): `python -m pytest -q -ra` — **93 passed,
+0 skipped** on Windows, including the Windows descendant-cleanup check;
+`python -m compileall -q merp_relay tests` — passed; `git diff --check` — passed.
+`git diff -- docs/evidence` was empty. Provider probes in correction tests are mocked;
+the pass performed no live provider inference or authentication flow.

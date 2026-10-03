@@ -1,5 +1,6 @@
 from datetime import datetime
-from .contracts import ResourceProfile, ResourceObservation, ReservePolicy, RoutingDecision, TaskRequest, SNAPSHOT_CONTROLS
+from .contracts import ResourceProfile, ResourceObservation, ReservePolicy, RoutingDecision, TaskRequest
+from .eligibility import task_profile_eligibility
 
 
 def route(task: TaskRequest, profiles: list[ResourceProfile],
@@ -17,18 +18,7 @@ def route(task: TaskRequest, profiles: list[ResourceProfile],
     current = {k: o for k, o in latest.items() if now < o.expires_at}
     excluded, eligible, effects = {}, [], []
     for p in sorted(profiles, key=lambda p: p.resource_id):
-        reasons = []
-        if task.execution_mode not in p.execution_modes:
-            reasons.append(f'unsupported execution mode: {task.execution_mode}')
-        for label, missing in [('capabilities', task.capabilities - p.capabilities),
-                               ('tools', task.tools - p.tools)]:
-            if missing:
-                reasons.append(f'missing {label}: {", ".join(sorted(missing))}')
-        requirements = task.boundary_requirements | (SNAPSHOT_CONTROLS
-            if task.execution_mode == 'snapshot_analysis' else frozenset())
-        for name in sorted(requirements):
-            if name not in p.controls or p.controls[name].state != 'supported_enforced':
-                reasons.append(f'boundary not enforced: {name}')
+        reasons = list(task_profile_eligibility(task, p).reasons)
         o = current.get(p.pool_id)
         if o and o.status in ('exhausted', 'unavailable'):
             reasons.append(f'pool {p.pool_id}: {o.status}')

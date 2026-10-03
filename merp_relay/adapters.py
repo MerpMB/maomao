@@ -41,6 +41,7 @@ def classify_error(events, returncode):
 def normalize(text, returncode, execution_id, task_id):
     events, output = [], None
     malformed = False
+    candidates, completed_turns = 0, 0
     for line in text.splitlines():
         try:
             event = json.loads(line)
@@ -49,13 +50,19 @@ def normalize(text, returncode, execution_id, task_id):
                 continue
             events.append(event)
             item = event.get('item')
-            if isinstance(item, dict) and item.get('type') == 'agent_message':
+            if event.get('type') == 'turn.completed':
+                completed_turns += 1
+                if candidates != 1:
+                    malformed = True
+            if event.get('type') == 'item.completed' and isinstance(item, dict) and item.get('type') == 'agent_message':
+                candidates += 1
+                if completed_turns:
+                    malformed = True
                 output = WorkerOutput.model_validate_json(item.get('text', ''))
         except (ValueError, TypeError, ValidationError):
             malformed = True
     failed_event = any(e.get('type') in ('error', 'turn.failed') for e in events)
-    completed = any(e.get('type') == 'turn.completed' for e in events)
-    if returncode or malformed or failed_event or output is None or not completed:
+    if returncode or malformed or failed_event or output is None or completed_turns != 1 or candidates != 1:
         return AgentResult(execution_id=execution_id, task_id=task_id, status='failed',
             summary=classify_error(events, returncode), unresolved=('No verified structured completion',)), events
     result = AgentResult(execution_id=execution_id, task_id=task_id, status='completed',
@@ -65,9 +72,6 @@ def normalize(text, returncode, execution_id, task_id):
 
 
 class CodexAdapter:
-    def __init__(self):
-        self.process = None
-
     def probe(self):
         executable = shutil.which('codex')
         if not executable:
@@ -83,10 +87,7 @@ class CodexAdapter:
             return {'status': 'unavailable', 'reason': type(e).__name__}
 
     def cancel(self):
-        if self.process is not None and self.process.poll() is None:
-            self.process.kill()
-        return {'local_stop_requested': True, 'remote_stopped': 'unknown',
-                'descendant_processes_stopped': 'unknown'}
+        return unsupported_cancellation()
 
     def execute(self, task: TaskRequest, snapshot: str, *, disposable=False, timeout=45):
         if not disposable or task.execution_mode != 'snapshot_analysis' or task.tools:
@@ -108,8 +109,13 @@ class ClaudeAdapter:
         try:
             version = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
             auth = subprocess.run([executable, 'auth', 'status'], capture_output=True, text=True, timeout=10)
+            if version.returncode != 0 or auth.returncode != 0 or version.stdout.strip() != '2.1.240 (Claude Code)':
+                raise ValueError('failed or unsupported probe')
             status = json.loads(auth.stdout)
-            subscription = status.get('loggedIn') is True and status.get('authMethod') == 'claude.ai'
+            if not isinstance(status, dict) or type(status.get('loggedIn')) is not bool or \
+                    not isinstance(status.get('authMethod'), str) or not isinstance(status.get('apiProvider'), str):
+                raise ValueError('invalid auth status shape')
+            subscription = status['loggedIn'] and status['authMethod'] == 'claude.ai' and status['apiProvider'] == 'firstParty'
             return {'status': 'available' if subscription else 'unavailable',
                 'version': version.stdout.strip(), 'subscription_authenticated': subscription,
                 'reason': 'subscription status verified' if subscription else 'supported subscription auth unavailable'}
@@ -123,7 +129,14 @@ class ClaudeAdapter:
             status='blocked', summary=self.probe()['reason']), []
 
     def cancel(self):
-        return {'local_stop_requested': False, 'remote_stopped': 'unknown'}
+        return unsupported_cancellation()
+
+
+def unsupported_cancellation():
+    """Synchronous dispatch owns no externally cancellable execution handle."""
+    return {'supported': False, 'active_process': 'not_exposed', 'cancellation_requested': False,
+            'local_process_exited': None, 'local_tree_termination': 'unknown', 'remote_execution': 'unknown',
+            'reason': 'Public cancellation unsupported; runner timeout cleanup only'}
 
 
 def normalize_claude(text, returncode, execution_id, task_id):
@@ -147,15 +160,17 @@ def normalize_claude(text, returncode, execution_id, task_id):
 
 def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=45, workdir=None):
     """Explicit weaker experiment never implies normal snapshot admission."""
-    from .boundary import runtime_profile, admission_reasons
-    prompt = prompt_for(task, packet)
+    from .boundary import runtime_profile
+    from .eligibility import task_profile_eligibility
     probe = adapter.probe()
     identity = str(uuid4())
-    blocked = admission_reasons(task, runtime_profile(adapter, probe))
-    if probe['status'] != 'available' or (blocked and not weaker_experiment):
+    eligibility = task_profile_eligibility(task, runtime_profile(adapter, probe))
+    blocked = list(eligibility.reasons)
+    if probe.get('status') != 'available' or eligibility.incompatibilities or (blocked and not weaker_experiment):
         return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
             summary='; '.join(blocked) if blocked else probe.get('reason', 'runtime unavailable')), {
             'admission': blocked, 'native_usage': {}}
+    prompt = prompt_for(task, packet)
     # Pin to interfaces actually inspected. Upgrade requires revalidation.
     is_claude = isinstance(adapter, ClaudeAdapter)
     version_matches = probe.get('version') == ('2.1.240 (Claude Code)' if is_claude else 'codex-cli 0.160.0')
@@ -189,8 +204,11 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
                    'prompt_bytes': len(prompt.encode()), 'admission': blocked,
                    'weaker_experiment': weaker_experiment, 'cancellation': cancellation}
         if cancellation:
-            return AgentResult(execution_id=identity, task_id=task.task_id, status='cancelled',
-                summary='local timeout; remote execution unknown'), metrics
+            stopped = cancellation.get('local_process_exited') is True
+            return AgentResult(execution_id=identity, task_id=task.task_id,
+                status='cancelled' if stopped else 'failed',
+                summary='local timeout; parent exit observed; remote execution unknown' if stopped else
+                        'local timeout; parent exit unverified; remote execution unknown'), metrics
         if is_claude:
             result, telemetry = normalize_claude(stdout, code, identity, task.task_id)
             metrics.update(telemetry)

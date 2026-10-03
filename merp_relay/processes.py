@@ -1,6 +1,7 @@
 """Local process stop requests do not acknowledge remote cancellation."""
 import os
 import subprocess
+import tempfile
 
 
 def stop_local(process):
@@ -19,27 +20,35 @@ def stop_local(process):
         process.wait(timeout=5)
         state['local_process_exited'] = True
     except (OSError, subprocess.TimeoutExpired):
-        process.kill()
         try:
+            process.kill()
             process.wait(timeout=5)
             state['local_process_exited'] = True
-        except subprocess.TimeoutExpired:
+        except (OSError, subprocess.TimeoutExpired):
             pass
+    # A request or a successful taskkill exit alone does not establish parent exit.
+    state['local_process_exited'] = process.poll() is not None
     return state
 
 
 def run_bounded(command, prompt, cwd, env, timeout):
     if not 0 < timeout <= 60:
         raise ValueError('timeout must be within 60 seconds')
-    p = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
-    try:
-        out, _ = p.communicate(prompt, timeout=timeout)
-        return out, p.returncode, None
-    except subprocess.TimeoutExpired:
-        cancellation = stop_local(p)
-        # Close pipes; do not wait indefinitely on descendants holding a pipe open.
-        for stream in (p.stdin, p.stdout, p.stderr):
-            if stream:
-                stream.close()
-        return '', p.returncode, cancellation
+    # Files avoid pipe reader threads/locks and descendant-held pipes during failed cleanup.
+    # The prompt still enters through stdin; raw diagnostics are discarded.
+    with tempfile.TemporaryFile() as incoming, tempfile.TemporaryFile() as outgoing:
+        incoming.write(prompt.encode('utf-8'))
+        incoming.seek(0)
+        p = subprocess.Popen(command, cwd=cwd, env=env, stdin=incoming,
+            stdout=outgoing, stderr=subprocess.DEVNULL)
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            cancellation = stop_local(p)
+            return '', p.returncode, cancellation
+        outgoing.seek(0)
+        # Bound normalization input independently of provider output size.
+        out = outgoing.read(1024 * 1024 + 1)
+        if len(out) > 1024 * 1024:
+            return '', p.returncode, None
+        return out.decode('utf-8', errors='replace'), p.returncode, None

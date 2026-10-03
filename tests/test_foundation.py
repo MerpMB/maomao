@@ -136,22 +136,20 @@ def test_structural_not_semantic():
         StructuralCheckpoint(execution_id='e', fixture_hash='x', progress=['tests passed'])
 
 
-def test_adapter_refuses_real_repository():
+def test_adapter_refuses_real_repository(monkeypatch):
     with pytest.raises(ValueError):
         CodexAdapter().execute(task(), 'snapshot')
-    result, events = ClaudeAdapter().execute(task())
+    adapter = ClaudeAdapter()
+    monkeypatch.setattr(adapter, 'probe', lambda: {'status': 'unavailable', 'reason': 'synthetic auth unavailable'})
+    result, events = adapter.execute(task())
     assert result.status == 'blocked' and not events
 
 
 def test_local_cancel_does_not_claim_remote_stop():
     adapter = CodexAdapter()
-    class Process:
-        killed = False
-        def poll(self): return None
-        def kill(self): self.killed = True
-    adapter.process = Process()
     state = adapter.cancel()
-    assert adapter.process.killed and state['remote_stopped'] == 'unknown'
+    assert state['supported'] is False and state['cancellation_requested'] is False
+    assert state['local_process_exited'] is None and state['remote_execution'] == 'unknown'
 
 
 def test_partial_message_is_not_completion():

@@ -34,6 +34,10 @@ The implemented Claude stdin/JSON path remains unexercised. Both profiles fail o
 snapshot admission because required controls remain unknown. The `--run` harness explicitly
 uses weaker disposable Codex experiments and records that exception; it does not qualify a profile.
 Runtime upgrades require interface revalidation. Subscription auth is checked with supported commands.
+Routing and dispatch share `task_profile_eligibility()`: mode, capabilities, tools and required
+controls must agree. The disposable weaker-boundary exception can waive control qualification
+only; it cannot waive incompatible mode, capabilities or tools. Pool state, reserves and ranking
+remain routing concerns, not claims made by dispatch admission.
 
 `route()` accepts a task, profiles, observations, reserves, preference order, an explicit
 timezone-aware clock, and configuration reference. It filters requirements and enforced
@@ -59,6 +63,19 @@ do not establish OS confinement or prevent runtime transport networking.
 Timeout tests use harmless local Python processes. Windows cleanup requests termination of
 the owned PID and descendants; the recorded runtime outcome proves only the local parent exit.
 Remote cancellation remains unknown, and no usage-limit observations are automatically created.
+The adapters' public `cancel()` API is explicitly **unsupported**: synchronous dispatch exposes
+no active process handle, so it sends no stop request. Only runner timeout cleanup requests a
+stop. A timeout reports `cancelled` only when local parent exit is observed; otherwise it reports
+`failed`. Tree and remote state remain unknown. Stdin/stdout use temporary files so cleanup does
+not wait on reader threads or pipes held by descendants; stderr is discarded. Each cleanup wait
+is bounded at five seconds (at most three such waits on Windows). A failed kill may leave a live
+process; the result records that uncertainty.
+
+Codex normalization requires exactly one `item.completed` agent message before exactly one
+`turn.completed`. Started/updated message text is ignored rather than parsed as final JSON;
+ambiguous multiple finals, malformed final data and failure events fail closed. Runtime profiles
+separate documented interface support from verified control qualification. All current required
+controls are unknown, including Claude flags whose combined enforcement path remains unvalidated.
 
 See [feasibility](docs/adapter-feasibility.md) and [decision](docs/decisions/0001-v01-foundation.md).
 The [snapshot decision](docs/decisions/0002-snapshot-execution.md) records M0.1 gates.

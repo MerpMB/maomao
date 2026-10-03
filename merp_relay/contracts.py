@@ -22,6 +22,9 @@ class Control(Contract):
     enforcer: str
     evidence: Evidence
     source: str
+    interface_support: Literal['documented_supported', 'unknown'] = 'unknown'
+    runtime_version: str | None = None
+    validation_basis: str = 'No runtime enforcement qualification recorded'
 
 
 class TaskRequest(Contract):
