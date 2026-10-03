@@ -1,4 +1,4 @@
-# Merp Relay — M0
+# Merp Relay — M0 / M0.1
 
 Personal resource-aware orchestration foundation. M0 implements validated contracts,
 pure deterministic routing, structured artifact handoff, and a disposable Codex spike.
@@ -13,17 +13,27 @@ python -m venv .venv
 .\.venv\Scripts\python -m merp_relay.spike
 ```
 
-Explicit subscription smoke, using existing Codex authentication without login:
+M0.1 probes and fail-closed snapshot admission report (no inference):
 
 ```powershell
-.\.venv\Scripts\python -m merp_relay.spike --run
+.\.venv\Scripts\python -m merp_relay.conformance
+```
+
+Explicit disposable experiment, at most two serial calls of 45 seconds each:
+
+```powershell
+.\.venv\Scripts\python -m merp_relay.conformance --run
 ```
 
 Run from the repository root. The smoke supplies a small fixture snapshot to Codex,
 disables shell and web search, uses a disposable working directory, and permits at most
-45 seconds. It writes sanitized evidence to `docs/evidence/codex-smoke.json`.
+45 seconds per call. It writes sanitized evidence to `docs/evidence/m01-snapshot.json`.
 Do not adapt this command to private repositories until the boundary gate is met.
 Claude is explicitly blocked because supported local auth status reported no login.
+The implemented Claude stdin/JSON path remains unexercised. Both profiles fail ordinary
+snapshot admission because required controls remain unknown. The `--run` harness explicitly
+uses weaker disposable Codex experiments and records that exception; it does not qualify a profile.
+Runtime upgrades require interface revalidation. Subscription auth is checked with supported commands.
 
 `route()` accepts a task, profiles, observations, reserves, preference order, an explicit
 timezone-aware clock, and configuration reference. It filters requirements and enforced
@@ -38,4 +48,17 @@ Artifacts validate their content hash and contain results, references and proven
 they contain no transcript. Structural checkpoints and worker continuations are separate
 contracts. M0 persists smoke artifacts, not a general recovery engine.
 
+`snapshot_analysis` supplies selected, hashed source data and upstream artifacts in a packet
+limited to 16 KiB; source instructions are treated as data. Review packets retain the original
+source so reviewers can challenge upstream findings. Snapshot admission requires declared
+enforcement of disabled model tools, shell/code, filesystem tools, browsing/external requests,
+and inherited integrations. Scoped repository filesystem reads are not required in this mode.
+`repository_access` remains unsupported by these runtime profiles. Snapshot tool restrictions
+do not establish OS confinement or prevent runtime transport networking.
+
+Timeout tests use harmless local Python processes. Windows cleanup requests termination of
+the owned PID and descendants; the recorded runtime outcome proves only the local parent exit.
+Remote cancellation remains unknown, and no usage-limit observations are automatically created.
+
 See [feasibility](docs/adapter-feasibility.md) and [decision](docs/decisions/0001-v01-foundation.md).
+The [snapshot decision](docs/decisions/0002-snapshot-execution.md) records M0.1 gates.

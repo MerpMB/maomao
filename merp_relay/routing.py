@@ -1,5 +1,5 @@
 from datetime import datetime
-from .contracts import ResourceProfile, ResourceObservation, ReservePolicy, RoutingDecision, TaskRequest
+from .contracts import ResourceProfile, ResourceObservation, ReservePolicy, RoutingDecision, TaskRequest, SNAPSHOT_CONTROLS
 
 
 def route(task: TaskRequest, profiles: list[ResourceProfile],
@@ -18,11 +18,15 @@ def route(task: TaskRequest, profiles: list[ResourceProfile],
     excluded, eligible, effects = {}, [], []
     for p in sorted(profiles, key=lambda p: p.resource_id):
         reasons = []
+        if task.execution_mode not in p.execution_modes:
+            reasons.append(f'unsupported execution mode: {task.execution_mode}')
         for label, missing in [('capabilities', task.capabilities - p.capabilities),
                                ('tools', task.tools - p.tools)]:
             if missing:
                 reasons.append(f'missing {label}: {", ".join(sorted(missing))}')
-        for name in sorted(task.boundary_requirements):
+        requirements = task.boundary_requirements | (SNAPSHOT_CONTROLS
+            if task.execution_mode == 'snapshot_analysis' else frozenset())
+        for name in sorted(requirements):
             if name not in p.controls or p.controls[name].state != 'supported_enforced':
                 reasons.append(f'boundary not enforced: {name}')
         o = current.get(p.pool_id)

@@ -7,6 +7,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 Evidence = Literal['official_documentation', 'locally_observed',
                    'unofficial_undocumented', 'design_hypothesis']
 Kind = Literal['INVESTIGATE', 'REVIEW']
+ExecutionMode = Literal['snapshot_analysis', 'repository_access']
+SNAPSHOT_CONTROLS = frozenset({'model_tools_disabled', 'shell_code_disabled',
+    'filesystem_tools_disabled', 'browsing_external_disabled', 'inherited_integrations_disabled'})
 
 
 class Contract(BaseModel):
@@ -25,6 +28,7 @@ class TaskRequest(Contract):
     task_id: str
     objective: str
     kind: Kind
+    execution_mode: ExecutionMode = 'repository_access'
     capabilities: frozenset[str] = frozenset()
     tools: frozenset[str] = frozenset()
     input_refs: tuple[str, ...] = ()
@@ -37,6 +41,7 @@ class ResourceProfile(Contract):
     resource_id: str
     provider: str
     runtime: str
+    execution_modes: frozenset[ExecutionMode] = frozenset({'repository_access'})
     model: str | None = None
     runtime_version: str | None = None
     authentication_mode: str

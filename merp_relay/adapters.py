@@ -1,4 +1,4 @@
-"""Bounded snapshot-only Codex spike and explicitly blocked Claude integration.
+"""Bounded snapshot adapters with fail-closed admission and sanitized normalization.
 
 This is not an isolation boundary for real repositories.
 """
@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from .contracts import AgentResult, Claim, TaskRequest
+from .processes import run_bounded
+from .snapshot import SourcePacket, SourceInput, prompt_for
 
 
 class WorkerOutput(BaseModel):
@@ -72,7 +74,10 @@ class CodexAdapter:
             return {'status': 'unavailable', 'reason': 'CLI missing'}
         try:
             p = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
-            return {'status': 'available' if p.returncode == 0 else 'unavailable',
+            auth = subprocess.run([executable, 'login', 'status'], capture_output=True, text=True, timeout=10)
+            subscription = auth.returncode == 0 and 'Logged in using ChatGPT' in (auth.stdout + auth.stderr)
+            return {'status': 'available' if p.returncode == 0 and subscription else 'unavailable',
+                    'subscription_authenticated': subscription,
                     'version': p.stdout.strip(), 'boundary': 'disposable_snapshot_only'}
         except (OSError, subprocess.TimeoutExpired) as e:
             return {'status': 'unavailable', 'reason': type(e).__name__}
@@ -84,55 +89,119 @@ class CodexAdapter:
                 'descendant_processes_stopped': 'unknown'}
 
     def execute(self, task: TaskRequest, snapshot: str, *, disposable=False, timeout=45):
-        if not disposable or task.boundary_requirements or task.tools:
-            raise ValueError('M0 adapter accepts only tool-free disposable snapshots')
-        if not 0 < timeout <= 60 or len(snapshot.encode()) > 16384:
-            raise ValueError('spike bounds exceeded')
-        execution_id = str(uuid4())
-        prompt = ('Investigate only the supplied source snapshot. Never invoke tools, shell, tests, '
-                  'network or other agents. Return concise findings, references and unresolved questions.\n'
-                  + task.model_dump_json() + '\nSOURCE SNAPSHOT:\n' + snapshot)
-        executable = shutil.which('codex')
-        if not executable:
-            return AgentResult(execution_id=execution_id, task_id=task.task_id,
-                               status='blocked', summary='CLI missing'), []
-        env = os.environ.copy()
-        for key in ('OPENAI_API_KEY', 'CODEX_API_KEY'):
-            env.pop(key, None)
-        with tempfile.TemporaryDirectory(prefix='merp-disposable-') as work:
-            schema = Path(work) / 'schema.json'
-            schema.write_text(json.dumps(WorkerOutput.model_json_schema()), encoding='utf-8')
-            command = [executable, 'exec', '--ignore-user-config', '--ignore-rules',
-                '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--json',
-                '--disable', 'shell_tool', '--disable', 'unified_exec',
-                '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
-                '--output-schema', str(schema), '-']
-            try:
-                self.process = subprocess.Popen(command, cwd=work, env=env, stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
-                try:
-                    stdout, stderr = self.process.communicate(prompt, timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    self.cancel()
-                    self.process.communicate(timeout=5)
-                    return AgentResult(execution_id=execution_id, task_id=task.task_id,
-                        status='cancelled', summary='Local timeout; remote cancellation unknown'), []
-                # Raw stderr may contain sensitive runtime diagnostics; never persist it.
-                return normalize(stdout, self.process.returncode, execution_id, task.task_id)
-            except OSError as e:
-                return AgentResult(execution_id=execution_id, task_id=task.task_id,
-                    status='blocked', summary=f'Runtime launch failed: {type(e).__name__}'), []
+        if not disposable or task.execution_mode != 'snapshot_analysis' or task.tools:
+            raise ValueError('adapter accepts explicit disposable snapshot mode only')
+        packet = SourcePacket(sources=(SourceInput.create(
+            'legacy-snapshot', snapshot),))
+        task = task.model_copy(update={'read_scope': ('legacy-snapshot',)})
+        result, metrics = execute_snapshot(self, task, packet, weaker_experiment=True, timeout=timeout)
+        return result, []
+
 
 
 class ClaudeAdapter:
-    """Blocked until local subscription authentication and boundary are verified."""
+    """Supported snapshot interface; inference stays blocked without subscription auth."""
     def probe(self):
-        return {'status': 'unavailable', 'version': '2.1.240',
-                'reason': '2026-10-03 supported auth status: loggedIn=false; re-probe required'}
+        executable = shutil.which('claude')
+        if not executable:
+            return {'status': 'unavailable', 'reason': 'CLI missing'}
+        try:
+            version = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
+            auth = subprocess.run([executable, 'auth', 'status'], capture_output=True, text=True, timeout=10)
+            status = json.loads(auth.stdout)
+            subscription = status.get('loggedIn') is True and status.get('authMethod') == 'claude.ai'
+            return {'status': 'available' if subscription else 'unavailable',
+                'version': version.stdout.strip(), 'subscription_authenticated': subscription,
+                'reason': 'subscription status verified' if subscription else 'supported subscription auth unavailable'}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return {'status': 'unavailable', 'reason': 'probe failed; details suppressed'}
 
-    def execute(self, task, **kwargs):
+    def execute(self, task, packet=None, **kwargs):
+        if packet is not None:
+            return execute_snapshot(self, task, packet, **kwargs)
         return AgentResult(execution_id=str(uuid4()), task_id=task.task_id,
             status='blocked', summary=self.probe()['reason']), []
 
     def cancel(self):
         return {'local_stop_requested': False, 'remote_stopped': 'unknown'}
+
+
+def normalize_claude(text, returncode, execution_id, task_id):
+    """Documented result envelope; fixture-tested until authenticated execution exists."""
+    try:
+        envelope = json.loads(text)
+        if not isinstance(envelope, dict) or envelope.get('type') != 'result' or \
+                envelope.get('subtype') != 'success' or envelope.get('is_error') is not False or returncode:
+            raise ValueError('incomplete result')
+        output = WorkerOutput.model_validate(envelope.get('structured_output'))
+        result = AgentResult(execution_id=execution_id, task_id=task_id, status='completed',
+            summary=output.summary, findings=tuple(Claim(text=f, source_refs=tuple(output.source_refs),
+            provenance='worker_reported') for f in output.findings), unresolved=tuple(output.unresolved))
+        usage = envelope.get('usage', {})
+        counters = {k: v for k, v in usage.items() if type(v) is int and v >= 0} if isinstance(usage, dict) else {}
+        return result, {'native_usage': counters, 'accounting_scope': 'runtime result envelope'}
+    except (ValueError, TypeError, ValidationError):
+        return AgentResult(execution_id=execution_id, task_id=task_id, status='failed',
+            summary='process_error' if returncode else 'malformed_or_incomplete_output'), {'native_usage': {}}
+
+
+def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=45, workdir=None):
+    """Explicit weaker experiment never implies normal snapshot admission."""
+    from .boundary import runtime_profile, admission_reasons
+    prompt = prompt_for(task, packet)
+    probe = adapter.probe()
+    identity = str(uuid4())
+    blocked = admission_reasons(task, runtime_profile(adapter, probe))
+    if probe['status'] != 'available' or (blocked and not weaker_experiment):
+        return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
+            summary='; '.join(blocked) if blocked else probe.get('reason', 'runtime unavailable')), {
+            'admission': blocked, 'native_usage': {}}
+    # Pin to interfaces actually inspected. Upgrade requires revalidation.
+    is_claude = isinstance(adapter, ClaudeAdapter)
+    version_matches = probe.get('version') == ('2.1.240 (Claude Code)' if is_claude else 'codex-cli 0.160.0')
+    if not version_matches:
+        return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
+            summary='runtime version requires interface revalidation'), {'native_usage': {}}
+    env = os.environ.copy()
+    for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+                'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'):
+        env.pop(key, None)
+    with tempfile.TemporaryDirectory(prefix='merp-snapshot-') as temp:
+        schema = Path(temp) / 'schema.json'
+        schema.write_text(json.dumps(WorkerOutput.model_json_schema()), encoding='utf-8')
+        if is_claude:
+            command = [shutil.which('claude'), '-p', '--safe-mode', '--tools', '',
+                '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
+                '--disable-slash-commands', '--permission-mode', 'dontAsk',
+                '--no-session-persistence', '--output-format', 'json', '--json-schema', schema.read_text()]
+        else:
+            command = [shutil.which('codex'), 'exec', '--ignore-user-config', '--ignore-rules',
+                '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--json',
+                '--disable', 'shell_tool', '--disable', 'unified_exec',
+                '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
+                '--output-schema', str(schema), '-']
+        try:
+            stdout, code, cancellation = run_bounded(command, prompt, workdir or temp, env, timeout)
+        except OSError:
+            return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
+                summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}
+        metrics = {'packet_bytes': len(packet.model_dump_json().encode()),
+                   'prompt_bytes': len(prompt.encode()), 'admission': blocked,
+                   'weaker_experiment': weaker_experiment, 'cancellation': cancellation}
+        if cancellation:
+            return AgentResult(execution_id=identity, task_id=task.task_id, status='cancelled',
+                summary='local timeout; remote execution unknown'), metrics
+        if is_claude:
+            result, telemetry = normalize_claude(stdout, code, identity, task.task_id)
+            metrics.update(telemetry)
+        else:
+            result, events = normalize(stdout, code, identity, task.task_id)
+            metrics['native_usage'] = {}
+            metrics['event_types'] = [e.get('type') for e in events]
+            metrics['tool_item_types'] = sorted({e['item']['type'] for e in events
+                if isinstance(e.get('item'), dict) and e['item'].get('type') not in ('agent_message', 'reasoning')
+                and isinstance(e['item'].get('type'), str)})
+            for e in events:
+                if e.get('type') == 'turn.completed' and isinstance(e.get('usage'), dict):
+                    metrics['native_usage'] = {k: v for k, v in e['usage'].items() if type(v) is int and v >= 0}
+        return result, metrics
