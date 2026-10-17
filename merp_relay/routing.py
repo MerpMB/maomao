@@ -5,8 +5,13 @@ from .eligibility import task_profile_eligibility
 
 def route(task: TaskRequest, profiles: list[ResourceProfile],
           observations: list[ResourceObservation], reserves: list[ReservePolicy],
-          preference: list[str], now: datetime, configuration_ref: str) -> RoutingDecision:
-    """Expired state becomes unknown; it never releases a reserve or supplies headroom."""
+          preference: list[str], now: datetime, configuration_ref: str,
+          contained: bool = False) -> RoutingDecision:
+    """Expired state becomes unknown; it never releases a reserve or supplies headroom.
+
+    contained: the run is a tool-free packet or a disposable worktree whose diff needs operator
+    approval, so unverified runtime controls are waived. Task incompatibilities never are.
+    """
     if now.tzinfo is None:
         raise ValueError('now must be timezone aware')
     if len({p.resource_id for p in profiles}) != len(profiles):
@@ -18,7 +23,8 @@ def route(task: TaskRequest, profiles: list[ResourceProfile],
     current = {k: o for k, o in latest.items() if now < o.expires_at}
     excluded, eligible, effects = {}, [], []
     for p in sorted(profiles, key=lambda p: p.resource_id):
-        reasons = list(task_profile_eligibility(task, p).reasons)
+        eligibility = task_profile_eligibility(task, p)
+        reasons = list(eligibility.incompatibilities if contained else eligibility.reasons)
         o = current.get(p.pool_id)
         if o and o.status in ('exhausted', 'unavailable'):
             reasons.append(f'pool {p.pool_id}: {o.status}')
@@ -45,6 +51,7 @@ def route(task: TaskRequest, profiles: list[ResourceProfile],
         outcome='selected' if eligible else 'blocked', reserve_effects=tuple(effects),
         observation_refs=tuple(sorted(o.observation_id for o in latest.values())),
         configuration_ref=configuration_ref,
-        rationale=('Comparable fresh headroom, then preference' if use_headroom else
-                   'Configured preference; unknown or expired quota supplies no headroom')
-                   if eligible else 'No resource satisfies capability, state and reserve rules')
+        rationale=('Contained run: unverified controls waived. ' if contained else '') +
+                  (('Comparable fresh headroom, then preference' if use_headroom else
+                    'Configured preference; unknown or expired quota supplies no headroom')
+                   if eligible else 'No resource satisfies capability, state and reserve rules'))

@@ -6,7 +6,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 Evidence = Literal['official_documentation', 'locally_observed',
                    'unofficial_undocumented', 'design_hypothesis']
-Kind = Literal['INVESTIGATE', 'REVIEW']
+Kind = Literal['INVESTIGATE', 'REVIEW', 'IMPLEMENT']
 ExecutionMode = Literal['snapshot_analysis', 'repository_access']
 SNAPSHOT_CONTROLS = frozenset({'model_tools_disabled', 'shell_code_disabled',
     'filesystem_tools_disabled', 'browsing_external_disabled', 'inherited_integrations_disabled'})

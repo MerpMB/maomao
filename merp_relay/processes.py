@@ -2,6 +2,7 @@
 import os
 import subprocess
 import tempfile
+import time
 
 
 def stop_local(process):
@@ -31,9 +32,10 @@ def stop_local(process):
     return state
 
 
-def run_bounded(command, prompt, cwd, env, timeout):
-    if not 0 < timeout <= 60:
-        raise ValueError('timeout must be within 60 seconds')
+def run_bounded(command, prompt, cwd, env, timeout, should_stop=None):
+    """should_stop: polled about once a second so another process can cancel through the ledger."""
+    if not 0 < timeout <= 3600:
+        raise ValueError('timeout must be within one hour')
     # Files avoid pipe reader threads/locks and descendant-held pipes during failed cleanup.
     # The prompt still enters through stdin; raw diagnostics are discarded.
     with tempfile.TemporaryFile() as incoming, tempfile.TemporaryFile() as outgoing:
@@ -41,11 +43,15 @@ def run_bounded(command, prompt, cwd, env, timeout):
         incoming.seek(0)
         p = subprocess.Popen(command, cwd=cwd, env=env, stdin=incoming,
             stdout=outgoing, stderr=subprocess.DEVNULL)
-        try:
-            p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            cancellation = stop_local(p)
-            return '', p.returncode, cancellation
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                p.wait(timeout=max(0.01, min(1, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                operator = bool(should_stop and should_stop())
+                if operator or time.monotonic() >= deadline:
+                    return '', p.returncode, {**stop_local(p), 'reason': 'operator' if operator else 'timeout'}
         outgoing.seek(0)
         # Bound normalization input independently of provider output size.
         out = outgoing.read(1024 * 1024 + 1)

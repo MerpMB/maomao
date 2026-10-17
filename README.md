@@ -1,7 +1,8 @@
 # Merp Relay
 
-> **Current plan: [docs/ROADMAP.md](docs/ROADMAP.md).** M1 is done: a real Codex→Claude handoff works and
-> `python -m merp_relay.quota` shows live 5h/7d quota. The M0/M0.1 notes below are historical.
+> **Current plan: [docs/ROADMAP.md](docs/ROADMAP.md).** M1–M2 are done: live 5h/7d quota (`python -m merp_relay.quota`),
+> a real Codex→Claude handoff, and worktree runs with operator approval (`python -m merp_relay.ops`).
+> The M0/M0.1 notes below are historical.
 
 ## M0 / M0.1 (historical)
 

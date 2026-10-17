@@ -59,10 +59,21 @@ its `rate_limit_event` to the quota cache. A typed `rejected` status means `exha
 Carried into M2: `route()` still excludes both profiles for snapshot mode (controls `unknown`), so the queue
 must apply the same contained policy that `execute_snapshot(weaker_experiment=True)` uses.
 
-**M2 — Ledger + worktree runs.** `ledger.py` on stdlib `sqlite3` (runs, events, observations, artifacts:
-one file in `%LOCALAPPDATA%\merp-relay\`). Serial queue. `repository_access` = `git worktree add` →
-worker → `git diff` stored → `approve` applies / `reject` removes. Popen handle is kept, so `cancel()` becomes real.
-✅ Done when: a run on a scratch repo produces a diff, approve applies it, reject leaves the branch untouched, and a kill mid-run is recorded.
+**M2 — Ledger + worktree runs. ✅ DONE 2026-10-18.** `ledger.py`: stdlib sqlite (`runs`, `events`) at
+`%LOCALAPPDATA%\merp-relay\relay.db`. Status changes are compare-and-set, so a race cannot apply twice or revive a run.
+`ops.py`: serial queue → `route(contained=True)` on live quota → `git worktree add --detach` → worker
+(Codex `workspace-write`, or Claude with file tools only plus `acceptEdits`) → stored `git diff` → worktree removed.
+`approve` = `git apply --index` (staged, never committed; refuses files the operator has changed). `reject` keeps the diff for audit.
+`cancel` works across processes: the runner polls the ledger once a second and stops the process tree.
+Verified for real on a scratch repo: Codex diff → approve → staged change. A mid-run cancel stopped Codex about 0.6 s after the request.
+Reject, conflicts, crashes and orphan recovery are covered by tests. Lessons: Windows Codex needs `windows.sandbox="elevated"`
+when user config is ignored, and patches must go through git as bytes (CRLF).
+
+```
+python -m merp_relay.ops submit "objective" --repo PATH [--timeout 900]
+python -m merp_relay.ops work [--watch]      # serial runner
+python -m merp_relay.ops list | show ID | approve ID | reject ID | cancel ID
+```
 
 **M3 — Ops Dashboard v1 (read-only).** See below. ✅ Done when it shows live pools, the queue and run detail from the ledger.
 

@@ -39,8 +39,9 @@ def classify_error(events, returncode):
     return 'process_error' if returncode else 'malformed_output'
 
 
-def normalize(text, returncode, execution_id, task_id):
-    events, output = [], None
+def normalize(text, returncode, execution_id, task_id, single_message=True):
+    """single_message=False (tool-using repo runs): the last completed agent message is final."""
+    events, output, texts = [], None, []
     malformed = False
     candidates, completed_turns = 0, 0
     for line in text.splitlines():
@@ -53,17 +54,22 @@ def normalize(text, returncode, execution_id, task_id):
             item = event.get('item')
             if event.get('type') == 'turn.completed':
                 completed_turns += 1
-                if candidates != 1:
+                if candidates == 0 or (single_message and candidates != 1):
                     malformed = True
             if event.get('type') == 'item.completed' and isinstance(item, dict) and item.get('type') == 'agent_message':
                 candidates += 1
                 if completed_turns:
                     malformed = True
-                output = WorkerOutput.model_validate_json(item.get('text', ''))
-        except (ValueError, TypeError, ValidationError):
+                texts.append(item.get('text', ''))
+        except (ValueError, TypeError):
             malformed = True
+    try:
+        output = WorkerOutput.model_validate_json(texts[-1]) if texts else None
+    except (ValueError, ValidationError):
+        malformed = True
     failed_event = any(e.get('type') in ('error', 'turn.failed') for e in events)
-    if returncode or malformed or failed_event or output is None or completed_turns != 1 or candidates != 1:
+    if returncode or malformed or failed_event or output is None or completed_turns != 1 or \
+            (single_message and candidates != 1):
         return AgentResult(execution_id=execution_id, task_id=task_id, status='failed',
             summary=classify_error(events, returncode), unresolved=('No verified structured completion',)), events
     result = AgentResult(execution_id=execution_id, task_id=task_id, status='completed',
@@ -198,10 +204,7 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
     prompt = prompt_for(task, packet)
     # Versions are recorded, not pinned: a changed CLI interface fails closed in normalization.
     is_claude = isinstance(adapter, ClaudeAdapter)
-    env = os.environ.copy()
-    for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
-                'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'):
-        env.pop(key, None)
+    env = subscription_env()
     with tempfile.TemporaryDirectory(prefix='merp-snapshot-') as temp:
         schema = Path(temp) / 'schema.json'
         schema.write_text(json.dumps(WorkerOutput.model_json_schema()), encoding='utf-8')
@@ -232,19 +235,83 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
                 status='cancelled' if stopped else 'failed',
                 summary='local timeout; parent exit observed; remote execution unknown' if stopped else
                         'local timeout; parent exit unverified; remote execution unknown'), metrics
-        if is_claude:
-            result, telemetry = normalize_claude(stdout, code, identity, task.task_id)
-            metrics.update(telemetry)
-            from .quota import record_claude
-            record_claude(telemetry.get('rate_limits'))
-        else:
-            result, events = normalize(stdout, code, identity, task.task_id)
-            metrics['native_usage'] = {}
-            metrics['event_types'] = [e.get('type') for e in events]
-            metrics['tool_item_types'] = sorted({e['item']['type'] for e in events
-                if isinstance(e.get('item'), dict) and e['item'].get('type') not in ('agent_message', 'reasoning')
-                and isinstance(e['item'].get('type'), str)})
-            for e in events:
-                if e.get('type') == 'turn.completed' and isinstance(e.get('usage'), dict):
-                    metrics['native_usage'] = {k: v for k, v in e['usage'].items() if type(v) is int and v >= 0}
+        result = finish(is_claude, stdout, code, identity, task, metrics)
         return result, metrics
+
+
+def subscription_env():
+    """Strip API-key/provider overrides so only the supported subscription login is used."""
+    env = os.environ.copy()
+    for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+                'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'):
+        env.pop(key, None)
+    return env
+
+
+def finish(is_claude, stdout, code, identity, task, metrics, single_message=True):
+    """Normalize runtime output into metrics; Claude runs also refresh the quota cache."""
+    if is_claude:
+        result, telemetry = normalize_claude(stdout, code, identity, task.task_id)
+        metrics.update(telemetry)
+        from .quota import record_claude
+        record_claude(telemetry.get('rate_limits'))
+        return result
+    result, events = normalize(stdout, code, identity, task.task_id, single_message)
+    metrics['native_usage'] = {}
+    metrics['event_types'] = [e.get('type') for e in events]
+    metrics['tool_item_types'] = sorted({e['item']['type'] for e in events
+        if isinstance(e.get('item'), dict) and e['item'].get('type') not in ('agent_message', 'reasoning')
+        and isinstance(e['item'].get('type'), str)})
+    for e in events:
+        if e.get('type') == 'turn.completed' and isinstance(e.get('usage'), dict):
+            metrics['native_usage'] = {k: v for k, v in e['usage'].items() if type(v) is int and v >= 0}
+    return result
+
+
+REPO_PROMPT = ('Authorized repository task follows. The current directory is a disposable git worktree. '
+    'Make only the file changes the objective needs, inside this directory. Do not commit, push, install '
+    'packages or touch anything outside it; an operator reviews the diff before it is applied. Return the '
+    'required JSON: summary, findings (what you changed and why), source_refs (paths), unresolved.\n'
+    'AUTHORIZED_TASK\n')
+
+
+def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None):
+    """Worker edits a disposable worktree under the runtime's own edit sandbox; the worktree is the containment."""
+    identity = str(uuid4())
+    if task.execution_mode != 'repository_access' or task.tools:
+        raise ValueError('repo execution requires a tool-free repository_access task')
+    is_claude = isinstance(adapter, ClaudeAdapter)
+    probe = adapter.probe()
+    if probe.get('status') != 'available':
+        return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
+            summary=probe.get('reason', 'runtime unavailable')), {'native_usage': {}}
+    with tempfile.TemporaryDirectory(prefix='merp-repo-') as temp:
+        schema = Path(temp) / 'schema.json'
+        schema.write_text(json.dumps(WorkerOutput.model_json_schema()), encoding='utf-8')
+        if is_claude:
+            # Only file tools exist; acceptEdits in -p mode denies anything else without prompting.
+            command = [shutil.which('claude'), '-p', '--safe-mode', '--tools', 'Read,Edit,Write,Glob,Grep',
+                '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
+                '--disable-slash-commands', '--permission-mode', 'acceptEdits', '--no-session-persistence',
+                '--output-format', 'stream-json', '--verbose', '--json-schema', schema.read_text()]
+        else:
+            command = [codex_executable(), 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
+                '--skip-git-repo-check', '--sandbox', 'workspace-write', '--json',
+                # Without user config, Windows falls back to a read-only sandbox.
+                *(['-c', 'windows.sandbox="elevated"'] if os.name == 'nt' else []),
+                '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
+                '--output-schema', str(schema), '-']
+        try:
+            stdout, code, cancellation = run_bounded(command, REPO_PROMPT + task.model_dump_json(),
+                cwd, subscription_env(), timeout, should_stop)
+        except OSError:
+            return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
+                summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}
+    metrics = {'runtime_version': probe.get('version'), 'cancellation': cancellation}
+    if cancellation:
+        stopped = cancellation.get('local_process_exited') is True
+        return AgentResult(execution_id=identity, task_id=task.task_id,
+            status='cancelled' if stopped else 'failed',
+            summary=f"{cancellation.get('reason')} stop; parent exit {'observed' if stopped else 'unverified'}; "
+                    'remote execution unknown'), metrics
+    return finish(is_claude, stdout, code, identity, task, metrics, single_message=False), metrics
