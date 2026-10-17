@@ -1,0 +1,254 @@
+'use strict';
+// Every value from the ledger is untrusted worker/operator text: build DOM with textContent only.
+
+const STATUS = {
+  queued: ['Queued', '--muted'], running: ['Running', '--accent'], cancel_requested: ['Cancelling', '--warning'],
+  needs_approval: ['Needs approval', '--warning'], applying: ['Applying', '--accent'], applied: ['Applied', '--good'],
+  completed: ['Completed', '--good'], rejected: ['Rejected', '--muted'], failed: ['Failed', '--critical'],
+  cancelled: ['Cancelled', '--muted'], blocked: ['Blocked', '--serious'],
+  available: ['Available', '--good'], exhausted: ['Exhausted', '--critical'], unknown: ['Unknown', '--muted'],
+};
+const WINDOW_NAMES = { five_hour: '5-hour', '300m': '5-hour', seven_day: '7-day', '10080m': '7-day' };
+let selected = null;
+
+function el(tag, attrs, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') node.className = v; else if (k === 'style') node.style.cssText = v; else node.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null) node.append(kid instanceof Node ? kid : String(kid));
+  return node;
+}
+const badge = (status) => {
+  const [label, color] = STATUS[status] || [status, '--muted'];
+  return el('span', { class: 'badge', style: `--sc: var(${color})` }, label);
+};
+const TOKEN = document.querySelector('meta[name="relay-token"]').content;
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Relay-Token': TOKEN },
+    body: JSON.stringify(body || {}) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+const getJSON = (url) => fetch(url, { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
+
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+}
+function until(iso) {
+  const m = Math.round((new Date(iso) - Date.now()) / 60000);
+  if (m <= 0) return 'now';
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  return d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`;
+}
+const clock = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+function level(used) {
+  if (used >= 1) return ['Exhausted', '--critical'];
+  if (used >= 0.9) return ['Near limit', '--serious'];
+  if (used >= 0.75) return ['High', '--warning'];
+  return ['OK', '--good'];
+}
+
+function meter(w) {
+  const name = WINDOW_NAMES[w.name] || w.name;
+  const known = typeof w.used === 'number';
+  const [lvl, color] = known ? level(w.used) : ['Unknown', '--muted'];
+  const pct = known ? Math.round(w.used * 100) : null;
+  return el('div', { class: 'meter' },
+    el('div', { class: 'row' },
+      el('span', {}, `${name} window · `, el('b', {}, known ? `${pct}% used` : 'usage unknown'), ` · ${lvl}`),
+      el('span', {}, w.resets_at ? `resets in ${until(w.resets_at)} (${clock(w.resets_at)})` : 'reset unknown')),
+    el('div', { class: 'track', role: 'meter', 'aria-label': `${name} window used`, 'aria-valuemin': '0',
+      'aria-valuemax': '100', 'aria-valuenow': known ? String(pct) : '0', 'aria-valuetext': known ? `${pct}% used, ${lvl}` : 'unknown' },
+      el('i', { style: `width:${known ? Math.min(100, pct) : 0}%; background: var(${color})` })));
+}
+
+async function loadPools() {
+  const box = document.getElementById('pools');
+  try {
+    const pools = await getJSON('/api/pools');
+    box.replaceChildren(...pools.map((p) => el('section', { class: 'pool' },
+      el('h3', {}, p.pool === 'claude' ? 'Claude' : p.pool === 'codex' ? 'Codex' : p.pool, badge(p.status)),
+      el('div', { class: 'meta' }, p.observed_at
+        ? `${p.stale ? 'STALE — last' : 'Last'} seen ${ago(p.observed_at)} ago · ${p.source}` +
+          (p.headroom != null ? ` · headroom ${Math.round(p.headroom * 100)}%` : '')
+        : p.reason),
+      p.stale ? el('div', { class: 'meta' }, 'Data expired: shown for context only; routing treats this pool as unknown.') : null,
+      p.windows.length ? p.windows.map(meter) : el('div', { class: 'empty' }, 'No window data. A run on this worker records it.'))));
+  } catch (e) {
+    box.replaceChildren(el('section', {}, el('div', { class: 'empty' }, `Pools unavailable (${e.message}).`)));
+  }
+}
+
+async function loadRuns() {
+  const runs = await getJSON('/api/runs');
+  document.getElementById('runs-empty').hidden = runs.length > 0;
+  document.getElementById('runs').replaceChildren(...runs.map((r) => {
+    const row = el('tr', { tabindex: '0', 'aria-selected': String(r.id === selected) },
+      el('td', {}, badge(r.status)), el('td', { class: 'mono' }, r.id), el('td', {}, r.kind),
+      el('td', {}, r.resource_id || '—'), el('td', { class: 'obj', title: r.objective }, r.objective),
+      el('td', { title: r.created_at }, ago(r.created_at)));
+    const open = () => { selected = r.id; loadRuns(); loadDetail(); };
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } });
+    return row;
+  }));
+}
+
+function diffView(diff) {
+  return el('pre', { class: 'diff', 'aria-label': 'Proposed diff' }, diff.split('\n').map((line) => el('span', {
+    class: line.startsWith('@@') ? 'hunk' : line.startsWith('+') && !line.startsWith('+++') ? 'add'
+      : line.startsWith('-') && !line.startsWith('---') ? 'del' : '' }, line || ' ')));
+}
+
+async function loadDetail() {
+  const box = document.getElementById('detail');
+  if (!selected) return;
+  const r = await getJSON(`/api/runs/${encodeURIComponent(selected)}`);
+  const result = r.artifact && r.artifact.result;
+  const excluded = Object.entries((r.routing && r.routing.excluded) || {});
+  box.replaceChildren(...[
+    el('h2', { id: 'detail-h' }, `Run ${r.id}`),
+    actions(r),
+    el('div', { class: 'notice error', id: 'action-notice', role: 'alert', hidden: '' }),
+    el('dl', { class: 'kv' },
+      el('dt', {}, 'Status'), el('dd', {}, badge(r.status)),
+      el('dt', {}, 'Objective'), el('dd', {}, r.objective),
+      el('dt', {}, 'Repository'), el('dd', { class: 'mono' }, r.repo),
+      el('dt', {}, 'Worker'), el('dd', {}, r.resource_id || '—'),
+      el('dt', {}, 'Route'), el('dd', {}, r.routing ? r.routing.rationale : 'not routed yet'),
+      excluded.length ? [el('dt', {}, 'Excluded'), el('dd', {}, excluded.map(([k, v]) => `${k}: ${v.join('; ')}`).join(' · '))] : null,
+      el('dt', {}, 'Base'), el('dd', { class: 'mono' }, r.base_commit ? r.base_commit.slice(0, 12) : '—'),
+      el('dt', {}, 'Artifact'), el('dd', { class: 'mono' }, r.artifact ? r.artifact.artifact_id.slice(0, 23) + '…' : '—')),
+    result ? [
+      el('h4', {}, 'Worker summary'), el('div', {}, result.summary),
+      result.findings.length ? [el('h4', {}, `Findings (${result.findings.length})`), el('ul', { class: 'findings' },
+        result.findings.map((f) => el('li', {}, f.text, el('span', { class: 'prov' }, f.provenance.replace('_', ' ')))))] : null,
+      result.unresolved.length ? [el('h4', {}, 'Unresolved'), el('ul', { class: 'findings' }, result.unresolved.map((u) => el('li', {}, u)))] : null,
+    ] : null,
+    el('h4', {}, r.diff_stats ? `Diff +${r.diff_stats.added} −${r.diff_stats.removed}` : 'Diff'),
+    r.diff ? diffView(r.diff) : el('div', { class: 'meta' }, 'No changes proposed.'),
+    el('h4', {}, 'Timeline'),
+    el('ol', { class: 'events' }, r.events.map((e) => el('li', {},
+      el('span', { class: 'mono', title: e.at }, new Date(e.at).toLocaleTimeString()), el('span', {}, e.type),
+      el('span', { class: 'meta' }, eventText(e)))))].flat(Infinity).filter((n) => n != null));
+}
+
+function actions(r) {
+  const buttons = [];
+  const act = (label, verb, cls, confirmText) => {
+    const b = el('button', { type: 'button', class: cls }, label);
+    b.addEventListener('click', async () => {
+      if (confirmText && !confirm(confirmText)) return;
+      const notice = document.getElementById('action-notice');
+      notice.hidden = true;
+      b.disabled = true;
+      try { await post(`/api/runs/${encodeURIComponent(r.id)}/${verb}`); }
+      catch (err) { notice.textContent = `${label} failed: ${err.message}`; notice.hidden = false; }
+      finally { b.disabled = false; loadRuns(); loadDetail(); }
+    });
+    buttons.push(b);
+  };
+  if (r.status === 'needs_approval') {
+    act('Approve & apply', 'approve', 'primary',
+      `Apply this diff to ${r.repo}?\nIt is staged, not committed. Files changed since the run are refused.`);
+    act('Reject', 'reject', 'danger', 'Reject this diff? It stays in the ledger for audit.');
+  }
+  if (['queued', 'running'].includes(r.status)) act(r.status === 'queued' ? 'Cancel' : 'Stop run', 'cancel', 'danger');
+  return buttons.length ? el('div', { class: 'actions' }, buttons) : null;
+}
+
+function eventText(e) {
+  const d = e.data || {};
+  if (e.type === 'routed') return `selected ${d.selected || 'none'} — ${d.rationale}`;
+  if (e.type === 'worker_finished') return `result ${d.result}` + (d.metrics && d.metrics.runtime_version ? ` · ${d.metrics.runtime_version}` : '');
+  if (e.type === 'apply_failed') return d.reason || '';
+  if (e.type === 'submitted') return `${d.kind} in ${d.repo}`;
+  if (e.type === 'setting') return `${d.key} = ${d.value}`;
+  return '';
+}
+
+function feed(e) {
+  const list = document.getElementById('events');
+  list.prepend(el('li', {}, el('span', { class: 'mono' }, new Date(e.at).toLocaleTimeString()),
+    el('span', { class: 'mono' }, e.run_id || 'relay'), el('span', {}, `${e.type} ${eventText(e)}`)));
+  while (list.children.length > 100) list.lastChild.remove();
+}
+
+function connect() {
+  const conn = document.getElementById('conn');
+  const source = new EventSource('/events');
+  source.onopen = () => conn.replaceChildren(el('span', { class: 'dot ok' }), 'live');
+  source.onerror = () => conn.replaceChildren(el('span', { class: 'dot bad' }), 'reconnecting…');
+  source.onmessage = (msg) => {
+    const e = JSON.parse(msg.data);
+    feed(e);
+    loadRuns();
+    if (e.run_id === selected) loadDetail();
+    if (e.type === 'worker_finished') loadPools();  // a finished run may carry fresh quota
+    if (e.type === 'setting' || e.type === 'submitted') loadStatus();
+  };
+}
+
+function theme() {
+  const root = document.documentElement;
+  try { const saved = localStorage.getItem('relay-theme'); if (saved) root.dataset.theme = saved; } catch (_) {}
+  document.getElementById('theme').addEventListener('click', () => {
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    try { localStorage.setItem('relay-theme', root.dataset.theme); } catch (_) {}
+  });
+}
+
+let status = null;
+async function loadStatus() {
+  try { status = await getJSON('/api/status'); } catch (_) { return; }
+  const runner = document.getElementById('runner');
+  const state = !status.runner ? ['Runner off', '--muted'] : status.paused ? ['Routing paused', '--warning'] : ['Runner active', '--good'];
+  runner.replaceChildren(el('span', { class: 'badge', style: `--sc: var(${state[1]})` }, state[0]),
+    status.queued ? ` ${status.queued} queued` : '');
+  const pause = document.getElementById('pause');
+  pause.disabled = false;
+  pause.textContent = status.paused ? 'Resume routing' : 'Pause routing';
+  document.getElementById('repos').replaceChildren(...status.recent_repos.map((r) => el('option', { value: r })));
+  const repo = document.querySelector('#submit-form [name=repo]');
+  if (!repo.value && status.recent_repos.length) repo.value = status.recent_repos[0];
+}
+
+document.getElementById('pause').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  try { await post('/api/routing', { paused: !(status && status.paused) }); } finally { loadStatus(); }
+});
+
+document.getElementById('submit-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const form = ev.target, notice = document.getElementById('submit-notice'), button = form.querySelector('button');
+  const data = new FormData(form);
+  button.disabled = true;
+  notice.classList.remove('error');
+  try {
+    const res = await post('/api/runs', { objective: data.get('objective'), repo: data.get('repo').trim(),
+      kind: data.get('kind'), timeout: Number(data.get('timeout')) });
+    notice.textContent = `Queued ${res.id}.` + (status && status.paused ? ' Routing is paused: it waits until you resume.' : '');
+    form.querySelector('[name=objective]').value = '';
+    selected = res.id;
+    loadRuns(); loadDetail(); loadStatus();
+  } catch (err) {
+    notice.textContent = err.message;
+    notice.classList.add('error');
+  } finally {
+    notice.hidden = false;
+    button.disabled = false;
+  }
+});
+
+theme();
+loadStatus(); setInterval(loadStatus, 10000);
+const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
+tick(); setInterval(tick, 1000);
+loadPools(); setInterval(loadPools, 30000);
+loadRuns().catch(() => {}); setInterval(() => loadRuns().catch(() => {}), 15000);
+connect();

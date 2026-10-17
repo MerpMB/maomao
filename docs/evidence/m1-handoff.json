@@ -1,0 +1,510 @@
+{
+  "observed_at": "2026-10-17T21:33:36.117181+00:00",
+  "label": "locally_observed",
+  "runtime_probes": {
+    "codex": {
+      "status": "available",
+      "subscription_authenticated": true,
+      "version": "codex-cli 0.163.0-alpha.10.2",
+      "boundary": "disposable_snapshot_only"
+    },
+    "claude": {
+      "status": "available",
+      "version": "2.1.240 (Claude Code)",
+      "subscription_authenticated": true,
+      "reason": "subscription status verified"
+    }
+  },
+  "profiles": {
+    "codex": {
+      "declaration": {
+        "schema_version": "1",
+        "resource_id": "codex",
+        "provider": "openai",
+        "runtime": "codex",
+        "execution_modes": [
+          "snapshot_analysis"
+        ],
+        "model": null,
+        "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+        "authentication_mode": "subscription",
+        "capabilities": [
+          "snapshot_reasoning"
+        ],
+        "tools": [],
+        "controls": {
+          "browsing_external_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "design_hypothesis",
+            "source": "https://learn.chatgpt.com/docs/config-file/config-reference",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "Runtime version not validated; no enforcement qualification"
+          },
+          "filesystem_tools_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "design_hypothesis",
+            "source": "https://learn.chatgpt.com/docs/config-file/config-reference",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "Runtime version not validated; no enforcement qualification"
+          },
+          "inherited_integrations_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "design_hypothesis",
+            "source": "https://learn.chatgpt.com/docs/config-file/config-reference",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "Runtime version not validated; no enforcement qualification"
+          },
+          "model_tools_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "design_hypothesis",
+            "source": "https://learn.chatgpt.com/docs/config-file/config-reference",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "Runtime version not validated; no enforcement qualification"
+          },
+          "shell_code_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "design_hypothesis",
+            "source": "https://learn.chatgpt.com/docs/config-file/config-reference",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "Runtime version not validated; no enforcement qualification"
+          },
+          "filesystem_read_scope": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "No local enforcement validation"
+          },
+          "filesystem_write_os": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "No local enforcement validation"
+          },
+          "runtime_transport_network": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "No local enforcement validation"
+          },
+          "local_process_tree_cancellation": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "No local enforcement validation"
+          },
+          "remote_execution_cancellation": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+            "validation_basis": "No local enforcement validation"
+          }
+        },
+        "pool_id": "codex-local",
+        "pool_mapping_source": "unverified local mapping",
+        "pool_mapping_evidence": "design_hypothesis",
+        "revalidated_at": "2026-10-17T21:33:36.117233Z"
+      },
+      "admission_reasons": [
+        "boundary not enforced: browsing_external_disabled",
+        "boundary not enforced: filesystem_tools_disabled",
+        "boundary not enforced: inherited_integrations_disabled",
+        "boundary not enforced: model_tools_disabled",
+        "boundary not enforced: shell_code_disabled"
+      ]
+    },
+    "claude": {
+      "declaration": {
+        "schema_version": "1",
+        "resource_id": "claude",
+        "provider": "anthropic",
+        "runtime": "claude",
+        "execution_modes": [
+          "snapshot_analysis"
+        ],
+        "model": null,
+        "runtime_version": "2.1.240 (Claude Code)",
+        "authentication_mode": "subscription",
+        "capabilities": [
+          "snapshot_reasoning"
+        ],
+        "tools": [],
+        "controls": {
+          "browsing_external_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "official_documentation",
+            "source": "https://code.claude.com/docs/en/cli-reference",
+            "interface_support": "documented_supported",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No combined-path enforcement validation; subscription probe verified"
+          },
+          "filesystem_tools_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "official_documentation",
+            "source": "https://code.claude.com/docs/en/cli-reference",
+            "interface_support": "documented_supported",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No combined-path enforcement validation; subscription probe verified"
+          },
+          "inherited_integrations_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "official_documentation",
+            "source": "https://code.claude.com/docs/en/cli-reference",
+            "interface_support": "documented_supported",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No combined-path enforcement validation; subscription probe verified"
+          },
+          "model_tools_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "official_documentation",
+            "source": "https://code.claude.com/docs/en/cli-reference",
+            "interface_support": "documented_supported",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No combined-path enforcement validation; subscription probe verified"
+          },
+          "shell_code_disabled": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "runtime configuration (unvalidated)",
+            "evidence": "official_documentation",
+            "source": "https://code.claude.com/docs/en/cli-reference",
+            "interface_support": "documented_supported",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No combined-path enforcement validation; subscription probe verified"
+          },
+          "filesystem_read_scope": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No local enforcement validation"
+          },
+          "filesystem_write_os": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No local enforcement validation"
+          },
+          "runtime_transport_network": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No local enforcement validation"
+          },
+          "local_process_tree_cancellation": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No local enforcement validation"
+          },
+          "remote_execution_cancellation": {
+            "schema_version": "1",
+            "state": "unknown",
+            "enforcer": "unknown",
+            "evidence": "design_hypothesis",
+            "source": "not established by snapshot execution",
+            "interface_support": "unknown",
+            "runtime_version": "2.1.240 (Claude Code)",
+            "validation_basis": "No local enforcement validation"
+          }
+        },
+        "pool_id": "claude-local",
+        "pool_mapping_source": "unverified local mapping",
+        "pool_mapping_evidence": "design_hypothesis",
+        "revalidated_at": "2026-10-17T21:33:36.117346Z"
+      },
+      "admission_reasons": [
+        "boundary not enforced: browsing_external_disabled",
+        "boundary not enforced: filesystem_tools_disabled",
+        "boundary not enforced: inherited_integrations_disabled",
+        "boundary not enforced: model_tools_disabled",
+        "boundary not enforced: shell_code_disabled"
+      ]
+    }
+  },
+  "handoff": {
+    "status": "succeeded",
+    "upstream_artifact": {
+      "schema_version": "1",
+      "artifact_id": "sha256:cc04666f8b814b1e430f1bdbfa1b0f0be4fb6a349c9dcdcdfa4c96913903a076",
+      "content_hash": "cc04666f8b814b1e430f1bdbfa1b0f0be4fb6a349c9dcdcdfa4c96913903a076",
+      "result": {
+        "schema_version": "1",
+        "execution_id": "6f868618-6851-4fce-be14-2de7d68348a5",
+        "task_id": "m01-investigate",
+        "status": "completed",
+        "summary": "Reversed bounds cause clamp to return upper for ordinary numeric inputs.",
+        "findings": [
+          {
+            "schema_version": "1",
+            "text": "When lower > upper, max(lower, value) is at least lower, so min(upper, ...) always returns upper. For example, clamp(5, 10, 0) returns 0.",
+            "source_refs": [
+              "behavior.py:1-3 \u2014 signature, interval docstring, and clamp expression.",
+              "README.md:1-2 \u2014 stated inclusive interval behavior and reversed-bounds investigation."
+            ],
+            "provenance": "worker_reported"
+          },
+          {
+            "schema_version": "1",
+            "text": "The implementation neither rejects nor normalizes reversed bounds; its interval guarantee assumes lower <= upper.",
+            "source_refs": [
+              "behavior.py:1-3 \u2014 signature, interval docstring, and clamp expression.",
+              "README.md:1-2 \u2014 stated inclusive interval behavior and reversed-bounds investigation."
+            ],
+            "provenance": "worker_reported"
+          }
+        ],
+        "unresolved": [
+          "Should reversed bounds raise an error, be swapped, or retain the current behavior?",
+          "What input types are supported, and how should NaN be handled?"
+        ],
+        "evidence_refs": []
+      }
+    },
+    "downstream_task": {
+      "schema_version": "1",
+      "task_id": "m01-review",
+      "objective": "Challenge upstream findings against original source",
+      "kind": "REVIEW",
+      "execution_mode": "snapshot_analysis",
+      "capabilities": [],
+      "tools": [],
+      "input_refs": [
+        "sha256:cc04666f8b814b1e430f1bdbfa1b0f0be4fb6a349c9dcdcdfa4c96913903a076"
+      ],
+      "completion_criteria": [
+        "Identify supported and unsupported author claims with source references"
+      ],
+      "read_scope": [
+        "README.md",
+        "behavior.py"
+      ],
+      "boundary_requirements": []
+    },
+    "original_source_hashes": [
+      "458b98bdc3b39f2f26fe726478988a07befba7a8113e3cebdbd0c0bfa5039f4c",
+      "d35ae247b2b191fd91c603c1d8bd00f1d6b44129f56759dc7aa99464091d7e2d"
+    ],
+    "reviewer": {
+      "schema_version": "1",
+      "execution_id": "8b63781b-304c-4a9a-b2b3-342bbc284051",
+      "task_id": "m01-review",
+      "status": "completed",
+      "summary": "The upstream report's two findings about behavior.py's clamp() are both fully supported by the source: when lower > upper, the implementation deterministically returns upper regardless of value, and the code provides no validation or normalization for reversed bounds. No unsupported or fabricated claims were identified.",
+      "findings": [
+        {
+          "schema_version": "1",
+          "text": "Claim 1 (reversed bounds force return of upper) is mathematically verified: for any value, max(lower, value) >= lower, and since lower > upper, max(lower, value) > upper always, so min(upper, max(lower, value)) deterministically equals upper for every value, not just the cited example.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "The cited example clamp(5, 10, 0) checks out: max(10, 5) = 10, min(0, 10) = 0, matching the claimed output of upper (0).",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "Claim 2 (implementation neither rejects nor normalizes reversed bounds, assumes lower <= upper) is supported: behavior.py contains no validation, swap, or assertion on parameter ordering, and the docstring's 'inclusive interval' guarantee only holds when lower <= upper.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "README.md source references are accurate: line 1 states the default 0..10 inclusive interval, line 2 explicitly directs investigation of the reversed-bounds case; both map correctly to the cited lines.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "Minor wording note: the summary phrase 'for ordinary numeric inputs' is conservative rather than inaccurate \u2014 the result actually holds for any value under standard ordering, including extreme values, so this under-claims slightly but does not overstate anything.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "No claims were found that go beyond what the two-line clamp expression and two-line README actually support; the worker did not introduce external assumptions.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 def clamp(value, lower=0, upper=10): ... return min(upper, max(lower, value))",
+            "README.md:1-2 \u2014 states default 0..10 inclusive interval and directs investigation of lower > upper case"
+          ],
+          "provenance": "worker_reported"
+        }
+      ],
+      "unresolved": [
+        "Whether reversed bounds should raise an error, swap lower/upper, or retain the current silent-upper-return behavior is a design decision not addressed by the source.",
+        "What input types are supported and how NaN should be handled is unaddressed by the source (Python's NaN comparisons return False, which could produce non-obvious results, but this is outside the explicitly supplied evidence)."
+      ],
+      "evidence_refs": []
+    },
+    "telemetry": {
+      "packet_bytes": 2132,
+      "prompt_bytes": 2893,
+      "admission": [
+        "boundary not enforced: browsing_external_disabled",
+        "boundary not enforced: filesystem_tools_disabled",
+        "boundary not enforced: inherited_integrations_disabled",
+        "boundary not enforced: model_tools_disabled",
+        "boundary not enforced: shell_code_disabled"
+      ],
+      "weaker_experiment": true,
+      "cancellation": null,
+      "runtime_version": "2.1.240 (Claude Code)",
+      "native_usage": {
+        "input_tokens": 4,
+        "cache_creation_input_tokens": 10142,
+        "cache_read_input_tokens": 7017,
+        "output_tokens": 3979
+      },
+      "accounting_scope": "runtime result envelope",
+      "rate_limits": [
+        {
+          "status": "allowed_warning",
+          "resetsAt": 1792303200,
+          "rateLimitType": "seven_day",
+          "utilization": 0.94,
+          "isUsingOverage": false,
+          "surpassedThreshold": 0.75
+        }
+      ]
+    }
+  },
+  "real_calls": 2,
+  "investigation": {
+    "result": {
+      "schema_version": "1",
+      "execution_id": "6f868618-6851-4fce-be14-2de7d68348a5",
+      "task_id": "m01-investigate",
+      "status": "completed",
+      "summary": "Reversed bounds cause clamp to return upper for ordinary numeric inputs.",
+      "findings": [
+        {
+          "schema_version": "1",
+          "text": "When lower > upper, max(lower, value) is at least lower, so min(upper, ...) always returns upper. For example, clamp(5, 10, 0) returns 0.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 signature, interval docstring, and clamp expression.",
+            "README.md:1-2 \u2014 stated inclusive interval behavior and reversed-bounds investigation."
+          ],
+          "provenance": "worker_reported"
+        },
+        {
+          "schema_version": "1",
+          "text": "The implementation neither rejects nor normalizes reversed bounds; its interval guarantee assumes lower <= upper.",
+          "source_refs": [
+            "behavior.py:1-3 \u2014 signature, interval docstring, and clamp expression.",
+            "README.md:1-2 \u2014 stated inclusive interval behavior and reversed-bounds investigation."
+          ],
+          "provenance": "worker_reported"
+        }
+      ],
+      "unresolved": [
+        "Should reversed bounds raise an error, be swapped, or retain the current behavior?",
+        "What input types are supported, and how should NaN be handled?"
+      ],
+      "evidence_refs": []
+    },
+    "telemetry": {
+      "packet_bytes": 783,
+      "prompt_bytes": 1467,
+      "admission": [
+        "boundary not enforced: browsing_external_disabled",
+        "boundary not enforced: filesystem_tools_disabled",
+        "boundary not enforced: inherited_integrations_disabled",
+        "boundary not enforced: model_tools_disabled",
+        "boundary not enforced: shell_code_disabled"
+      ],
+      "weaker_experiment": true,
+      "cancellation": null,
+      "runtime_version": "codex-cli 0.163.0-alpha.10.2",
+      "native_usage": {
+        "input_tokens": 14929,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 164,
+        "reasoning_output_tokens": 0
+      },
+      "event_types": [
+        "thread.started",
+        "turn.started",
+        "item.completed",
+        "turn.completed"
+      ],
+      "tool_item_types": []
+    }
+  },
+  "fixture_before": "64fdeee3237d8e993abf449336c6dc12a61fb35b549a9ea8d4d1d59b042473cc",
+  "fixture_after": "64fdeee3237d8e993abf449336c6dc12a61fb35b549a9ea8d4d1d59b042473cc"
+}
