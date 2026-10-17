@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created_at TEXT, updated_a
     artifact TEXT, routing TEXT, summary TEXT);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, at TEXT,
     type TEXT, data TEXT);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 '''
 
 
@@ -82,6 +83,15 @@ class Ledger:
         rows = self.db.execute(f'SELECT id FROM runs WHERE status IN ({",".join("?" * len(statuses))}) '
                                'ORDER BY created_at', statuses)
         return [r[0] for r in rows]
+
+    def setting(self, key, default=None):
+        row = self.db.execute('SELECT value FROM settings WHERE key = ?', (key,)).fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key, value):
+        self.db.execute('INSERT INTO settings (key, value) VALUES (?, ?) '
+                        'ON CONFLICT(key) DO UPDATE SET value = excluded.value', (key, value))
+        self.event(None, 'setting', key=key, value=value)
 
     def events(self, run_id=None, after=0, limit=200):
         sql, args = 'SELECT * FROM events WHERE id > ?', [after]

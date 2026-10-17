@@ -23,6 +23,14 @@ const badge = (status) => {
   const [label, color] = STATUS[status] || [status, '--muted'];
   return el('span', { class: 'badge', style: `--sc: var(${color})` }, label);
 };
+const TOKEN = document.querySelector('meta[name="relay-token"]').content;
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Relay-Token': TOKEN },
+    body: JSON.stringify(body || {}) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
 const getJSON = (url) => fetch(url, { cache: 'no-store' }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); });
 
 function ago(iso) {
@@ -104,6 +112,8 @@ async function loadDetail() {
   const excluded = Object.entries((r.routing && r.routing.excluded) || {});
   box.replaceChildren(...[
     el('h2', { id: 'detail-h' }, `Run ${r.id}`),
+    actions(r),
+    el('div', { class: 'notice error', id: 'action-notice', role: 'alert', hidden: '' }),
     el('dl', { class: 'kv' },
       el('dt', {}, 'Status'), el('dd', {}, badge(r.status)),
       el('dt', {}, 'Objective'), el('dd', {}, r.objective),
@@ -121,12 +131,34 @@ async function loadDetail() {
     ] : null,
     el('h4', {}, r.diff_stats ? `Diff +${r.diff_stats.added} −${r.diff_stats.removed}` : 'Diff'),
     r.diff ? diffView(r.diff) : el('div', { class: 'meta' }, 'No changes proposed.'),
-    r.status === 'needs_approval' ? el('p', { class: 'meta' }, 'Review, then run ',
-      el('code', {}, `python -m merp_relay.ops approve ${r.id}`), ' or ', el('code', {}, `reject ${r.id}`), '.') : null,
     el('h4', {}, 'Timeline'),
     el('ol', { class: 'events' }, r.events.map((e) => el('li', {},
       el('span', { class: 'mono', title: e.at }, new Date(e.at).toLocaleTimeString()), el('span', {}, e.type),
       el('span', { class: 'meta' }, eventText(e)))))].flat(Infinity).filter((n) => n != null));
+}
+
+function actions(r) {
+  const buttons = [];
+  const act = (label, verb, cls, confirmText) => {
+    const b = el('button', { type: 'button', class: cls }, label);
+    b.addEventListener('click', async () => {
+      if (confirmText && !confirm(confirmText)) return;
+      const notice = document.getElementById('action-notice');
+      notice.hidden = true;
+      b.disabled = true;
+      try { await post(`/api/runs/${encodeURIComponent(r.id)}/${verb}`); }
+      catch (err) { notice.textContent = `${label} failed: ${err.message}`; notice.hidden = false; }
+      finally { b.disabled = false; loadRuns(); loadDetail(); }
+    });
+    buttons.push(b);
+  };
+  if (r.status === 'needs_approval') {
+    act('Approve & apply', 'approve', 'primary',
+      `Apply this diff to ${r.repo}?\nIt is staged, not committed. Files changed since the run are refused.`);
+    act('Reject', 'reject', 'danger', 'Reject this diff? It stays in the ledger for audit.');
+  }
+  if (['queued', 'running'].includes(r.status)) act(r.status === 'queued' ? 'Cancel' : 'Stop run', 'cancel', 'danger');
+  return buttons.length ? el('div', { class: 'actions' }, buttons) : null;
 }
 
 function eventText(e) {
@@ -135,13 +167,14 @@ function eventText(e) {
   if (e.type === 'worker_finished') return `result ${d.result}` + (d.metrics && d.metrics.runtime_version ? ` · ${d.metrics.runtime_version}` : '');
   if (e.type === 'apply_failed') return d.reason || '';
   if (e.type === 'submitted') return `${d.kind} in ${d.repo}`;
+  if (e.type === 'setting') return `${d.key} = ${d.value}`;
   return '';
 }
 
 function feed(e) {
   const list = document.getElementById('events');
   list.prepend(el('li', {}, el('span', { class: 'mono' }, new Date(e.at).toLocaleTimeString()),
-    el('span', { class: 'mono' }, e.run_id), el('span', {}, `${e.type} ${eventText(e)}`)));
+    el('span', { class: 'mono' }, e.run_id || 'relay'), el('span', {}, `${e.type} ${eventText(e)}`)));
   while (list.children.length > 100) list.lastChild.remove();
 }
 
@@ -156,6 +189,7 @@ function connect() {
     loadRuns();
     if (e.run_id === selected) loadDetail();
     if (e.type === 'worker_finished') loadPools();  // a finished run may carry fresh quota
+    if (e.type === 'setting' || e.type === 'submitted') loadStatus();
   };
 }
 
@@ -169,7 +203,50 @@ function theme() {
   });
 }
 
+let status = null;
+async function loadStatus() {
+  try { status = await getJSON('/api/status'); } catch (_) { return; }
+  const runner = document.getElementById('runner');
+  const state = !status.runner ? ['Runner off', '--muted'] : status.paused ? ['Routing paused', '--warning'] : ['Runner active', '--good'];
+  runner.replaceChildren(el('span', { class: 'badge', style: `--sc: var(${state[1]})` }, state[0]),
+    status.queued ? ` ${status.queued} queued` : '');
+  const pause = document.getElementById('pause');
+  pause.disabled = false;
+  pause.textContent = status.paused ? 'Resume routing' : 'Pause routing';
+  document.getElementById('repos').replaceChildren(...status.recent_repos.map((r) => el('option', { value: r })));
+  const repo = document.querySelector('#submit-form [name=repo]');
+  if (!repo.value && status.recent_repos.length) repo.value = status.recent_repos[0];
+}
+
+document.getElementById('pause').addEventListener('click', async (ev) => {
+  ev.target.disabled = true;
+  try { await post('/api/routing', { paused: !(status && status.paused) }); } finally { loadStatus(); }
+});
+
+document.getElementById('submit-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const form = ev.target, notice = document.getElementById('submit-notice'), button = form.querySelector('button');
+  const data = new FormData(form);
+  button.disabled = true;
+  notice.classList.remove('error');
+  try {
+    const res = await post('/api/runs', { objective: data.get('objective'), repo: data.get('repo').trim(),
+      kind: data.get('kind'), timeout: Number(data.get('timeout')) });
+    notice.textContent = `Queued ${res.id}.` + (status && status.paused ? ' Routing is paused: it waits until you resume.' : '');
+    form.querySelector('[name=objective]').value = '';
+    selected = res.id;
+    loadRuns(); loadDetail(); loadStatus();
+  } catch (err) {
+    notice.textContent = err.message;
+    notice.classList.add('error');
+  } finally {
+    notice.hidden = false;
+    button.disabled = false;
+  }
+});
+
 theme();
+loadStatus(); setInterval(loadStatus, 10000);
 const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
 tick(); setInterval(tick, 1000);
 loadPools(); setInterval(loadPools, 30000);

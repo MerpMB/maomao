@@ -106,13 +106,21 @@ def recover(ledger):
         git(ledger.run(run_id)['repo'], 'worktree', 'prune', check=False)
 
 
+def paused(ledger):
+    return ledger.setting('paused') == '1'
+
+
 def work(ledger, watch=False):
+    """Serial loop. Pause stops new pickups; a run already in flight finishes or is cancelled."""
     recover(ledger)
     while True:
-        queued = ledger.with_status('queued')
-        for run_id in queued:
-            print(run_id, process(ledger, run_id), flush=True)
-        if not watch:
+        queued = [] if paused(ledger) else ledger.with_status('queued')
+        for run_id in queued[:1]:  # re-check pause between runs
+            try:
+                print(run_id, process(ledger, run_id), flush=True)
+            except Exception as e:  # e.g. the repository vanished; the loop must survive
+                ledger.transition(run_id, ['queued', *ACTIVE], 'failed', summary=f'runner error: {type(e).__name__}')
+        if not watch and not queued:
             return
         if not queued:
             time.sleep(2)

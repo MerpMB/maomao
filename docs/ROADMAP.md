@@ -84,8 +84,13 @@ bound to 127.0.0.1, a foreign `Host` gets 403 (DNS rebinding), CSP `default-src 
 Note: Codex repo runs may execute shell commands inside its workspace-write sandbox (it ran its own checks).
 Claude repo runs have file tools only.
 
-**M4 — Dashboard controls.** Submit task, cancel, approve/reject diff, pause routing, toggle reserves,
-`limit_action` per pool. ✅ Done when a full task lifecycle runs from the browser with no CLI.
+**M4 — Dashboard controls. ✅ DONE 2026-10-18.** The server also runs the serial runner in-process (`--no-runner` to opt out).
+From the browser you can queue a task (repo path picker from recent runs), stop or cancel, approve & apply (confirm dialog),
+reject, and pause/resume routing (a ledger setting, also honored by `ops work`). Writes need a per-start token, sent
+in the page `<meta>` and echoed as `X-Relay-Token`, and a local Origin/Host. The input is validated (objective ≤ 4000 chars,
+git repo with a commit, timeout 30–3600 s). Verified for real: browser submit → Codex run → diff → Approve → README staged in the scratch repo.
+**Cut on purpose (ultra):** reserve toggles and per-pool `limit_action`. No reserves are configured, and `route()`
+already skips exhausted pools, which in effect is `rotate`. Add these when a second account or a reserve policy actually exists.
 
 **Later (only when a need shows up):** parallel runs, auto-rotation across several accounts, notifications,
 fix-round session resume, more runtimes (Gemini/OpenCode).
