@@ -75,7 +75,14 @@ python -m merp_relay.ops work [--watch]      # serial runner
 python -m merp_relay.ops list | show ID | approve ID | reject ID | cancel ID
 ```
 
-**M3 — Ops Dashboard v1 (read-only).** See below. ✅ Done when it shows live pools, the queue and run detail from the ledger.
+**M3 — Ops Dashboard v1 (read-only). ✅ DONE 2026-10-18.** `python -m merp_relay.server` → http://127.0.0.1:8765/.
+Stdlib `ThreadingHTTPServer`: `GET /api/pools|runs|runs/{id}` and SSE `/events` (tails the ledger event table).
+Static `index.html` + `app.js` with no build step. Shows the pools (5h/7d meters, reset countdown, stale shown as unknown),
+the runs, run detail (route rationale, worker-reported findings, diff, timeline) and a live event feed. Safety:
+bound to 127.0.0.1, a foreign `Host` gets 403 (DNS rebinding), CSP `default-src 'self'`, and all ledger text goes through
+`textContent`. Checked in the browser at desktop and 375px width, light and dark.
+Note: Codex repo runs may execute shell commands inside its workspace-write sandbox (it ran its own checks).
+Claude repo runs have file tools only.
 
 **M4 — Dashboard controls.** Submit task, cancel, approve/reject diff, pause routing, toggle reserves,
 `limit_action` per pool. ✅ Done when a full task lifecycle runs from the browser with no CLI.
@@ -87,7 +94,7 @@ fix-round session resume, more runtimes (Gemini/OpenCode).
 
 **Stack (stdlib first):** `http.server.ThreadingHTTPServer` + JSON API + SSE (`/events`) +
 one `static/index.html` with vanilla JS/CSS. No build step and no new dependencies. Bound to `127.0.0.1` only,
-with a random token printed at start (header check on every write). Command: `python -m merp_relay serve`.
+with a random token printed at start (header check on every write, M4). Command: `python -m merp_relay.server`.
 
 ```
 ┌ MERP RELAY ─ OPS ──────────────────────── ● routing ON  [Pause] ─ 14:02 ICT ┐

@@ -16,3 +16,6 @@ include = ["merp_relay*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+merp_relay = ["static/*"]
