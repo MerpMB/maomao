@@ -105,6 +105,7 @@ VALID_AUTH = {'loggedIn': True, 'authMethod': 'claude.ai', 'apiProvider': 'first
     (json.dumps(VALID_AUTH), 1, 0, '2.1.240 (Claude Code)', False),
     (json.dumps(VALID_AUTH), 0, 1, '2.1.240 (Claude Code)', False),
     (json.dumps(VALID_AUTH), 0, 0, 'unknown-version', False),
+    (json.dumps(VALID_AUTH), 0, 0, '2.2.0 (Claude Code)', True),
     (json.dumps({**VALID_AUTH, 'authMethod': 'api_key'}), 0, 0, '2.1.240 (Claude Code)', False),
     (json.dumps({**VALID_AUTH, 'apiProvider': 'thirdParty'}), 0, 0, '2.1.240 (Claude Code)', False),
     (json.dumps(VALID_AUTH), 0, 0, '2.1.240 (Claude Code)', True),

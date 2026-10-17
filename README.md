@@ -1,4 +1,9 @@
-# Merp Relay — M0 / M0.1
+# Merp Relay
+
+> **Current plan: [docs/ROADMAP.md](docs/ROADMAP.md).** M1 is done: a real Codex→Claude handoff works and
+> `python -m merp_relay.quota` shows live 5h/7d quota. The M0/M0.1 notes below are historical.
+
+## M0 / M0.1 (historical)
 
 Personal resource-aware orchestration foundation. M0 implements validated contracts,
 pure deterministic routing, structured artifact handoff, and a disposable Codex spike.

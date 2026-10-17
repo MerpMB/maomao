@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from functools import cache
 from pathlib import Path
 from uuid import uuid4
 
@@ -71,9 +72,25 @@ def normalize(text, returncode, execution_id, task_id):
     return result, events
 
 
+@cache
+def codex_executable():
+    """PATH first, else the CLI bundled in the Codex desktop app (its path changes per update)."""
+    found = os.environ.get('MERP_CODEX') or shutil.which('codex')
+    if found or os.name != 'nt':
+        return found
+    try:
+        # WindowsApps cannot be listed, but the package reports its own install location.
+        location = subprocess.run(['powershell', '-NoProfile', '-Command',
+            '(Get-AppxPackage OpenAI.Codex).InstallLocation'], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    bundled = Path(location.strip(), 'app', 'resources', 'codex.exe') if location.strip() else None
+    return str(bundled) if bundled and bundled.exists() else None
+
+
 class CodexAdapter:
     def probe(self):
-        executable = shutil.which('codex')
+        executable = codex_executable()
         if not executable:
             return {'status': 'unavailable', 'reason': 'CLI missing'}
         try:
@@ -109,7 +126,7 @@ class ClaudeAdapter:
         try:
             version = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10)
             auth = subprocess.run([executable, 'auth', 'status'], capture_output=True, text=True, timeout=10)
-            if version.returncode != 0 or auth.returncode != 0 or version.stdout.strip() != '2.1.240 (Claude Code)':
+            if version.returncode != 0 or auth.returncode != 0 or not version.stdout.strip().endswith('(Claude Code)'):
                 raise ValueError('failed or unsupported probe')
             status = json.loads(auth.stdout)
             if not isinstance(status, dict) or type(status.get('loggedIn')) is not bool or \
@@ -140,9 +157,13 @@ def unsupported_cancellation():
 
 
 def normalize_claude(text, returncode, execution_id, task_id):
-    """Documented result envelope; fixture-tested until authenticated execution exists."""
+    """stream-json: last `result` line is the envelope; `rate_limit_event` lines carry quota."""
+    rate_limits = []
     try:
-        envelope = json.loads(text)
+        lines = [json.loads(line) for line in text.splitlines() if line.strip()]
+        rate_limits += [e['rate_limit_info'] for e in lines if isinstance(e, dict)
+                       and e.get('type') == 'rate_limit_event' and isinstance(e.get('rate_limit_info'), dict)]
+        envelope = lines[-1] if lines else None
         if not isinstance(envelope, dict) or envelope.get('type') != 'result' or \
                 envelope.get('subtype') != 'success' or envelope.get('is_error') is not False or returncode:
             raise ValueError('incomplete result')
@@ -152,13 +173,17 @@ def normalize_claude(text, returncode, execution_id, task_id):
             provenance='worker_reported') for f in output.findings), unresolved=tuple(output.unresolved))
         usage = envelope.get('usage', {})
         counters = {k: v for k, v in usage.items() if type(v) is int and v >= 0} if isinstance(usage, dict) else {}
-        return result, {'native_usage': counters, 'accounting_scope': 'runtime result envelope'}
+        return result, {'native_usage': counters, 'accounting_scope': 'runtime result envelope',
+                        'rate_limits': rate_limits}
     except (ValueError, TypeError, ValidationError):
         return AgentResult(execution_id=execution_id, task_id=task_id, status='failed',
-            summary='process_error' if returncode else 'malformed_or_incomplete_output'), {'native_usage': {}}
+            # Only a typed rejection counts as exhaustion, never a generic failure.
+            summary='exhausted' if any(r.get('status') == 'rejected' for r in rate_limits) else
+                    'process_error' if returncode else 'malformed_or_incomplete_output'), {
+            'native_usage': {}, 'rate_limits': rate_limits}
 
 
-def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=45, workdir=None):
+def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=60, workdir=None):
     """Explicit weaker experiment never implies normal snapshot admission."""
     from .boundary import runtime_profile
     from .eligibility import task_profile_eligibility
@@ -171,12 +196,8 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
             summary='; '.join(blocked) if blocked else probe.get('reason', 'runtime unavailable')), {
             'admission': blocked, 'native_usage': {}}
     prompt = prompt_for(task, packet)
-    # Pin to interfaces actually inspected. Upgrade requires revalidation.
+    # Versions are recorded, not pinned: a changed CLI interface fails closed in normalization.
     is_claude = isinstance(adapter, ClaudeAdapter)
-    version_matches = probe.get('version') == ('2.1.240 (Claude Code)' if is_claude else 'codex-cli 0.160.0')
-    if not version_matches:
-        return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
-            summary='runtime version requires interface revalidation'), {'native_usage': {}}
     env = os.environ.copy()
     for key in ('OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
                 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'):
@@ -188,9 +209,10 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
             command = [shutil.which('claude'), '-p', '--safe-mode', '--tools', '',
                 '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
                 '--disable-slash-commands', '--permission-mode', 'dontAsk',
-                '--no-session-persistence', '--output-format', 'json', '--json-schema', schema.read_text()]
+                '--no-session-persistence', '--output-format', 'stream-json', '--verbose',
+                '--json-schema', schema.read_text()]
         else:
-            command = [shutil.which('codex'), 'exec', '--ignore-user-config', '--ignore-rules',
+            command = [codex_executable(), 'exec', '--ignore-user-config', '--ignore-rules',
                 '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--json',
                 '--disable', 'shell_tool', '--disable', 'unified_exec',
                 '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
@@ -202,7 +224,8 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
                 summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}
         metrics = {'packet_bytes': len(packet.model_dump_json().encode()),
                    'prompt_bytes': len(prompt.encode()), 'admission': blocked,
-                   'weaker_experiment': weaker_experiment, 'cancellation': cancellation}
+                   'weaker_experiment': weaker_experiment, 'cancellation': cancellation,
+                   'runtime_version': probe.get('version')}
         if cancellation:
             stopped = cancellation.get('local_process_exited') is True
             return AgentResult(execution_id=identity, task_id=task.task_id,
@@ -212,6 +235,8 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
         if is_claude:
             result, telemetry = normalize_claude(stdout, code, identity, task.task_id)
             metrics.update(telemetry)
+            from .quota import record_claude
+            record_claude(telemetry.get('rate_limits'))
         else:
             result, events = normalize(stdout, code, identity, task.task_id)
             metrics['native_usage'] = {}
