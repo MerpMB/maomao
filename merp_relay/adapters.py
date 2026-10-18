@@ -190,7 +190,7 @@ def normalize_claude(text, returncode, execution_id, task_id):
             'native_usage': {}, 'rate_limits': rate_limits}
 
 
-def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=60, workdir=None):
+def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=60, workdir=None, should_stop=None):
     """Explicit weaker experiment never implies normal snapshot admission."""
     from .boundary import runtime_profile
     from .eligibility import task_profile_eligibility
@@ -222,7 +222,7 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
                 '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
                 '--output-schema', str(schema), '-']
         try:
-            stdout, code, cancellation = run_bounded(command, prompt, workdir or temp, env, timeout)
+            stdout, code, cancellation = run_bounded(command, prompt, workdir or temp, env, timeout, should_stop)
         except OSError:
             return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
                 summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}

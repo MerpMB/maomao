@@ -84,3 +84,16 @@ def test_claude_typed_rejection_reports_exhausted():
                                         {'type': 'result', 'subtype': 'error', 'is_error': True}]))
     result, _ = normalize_claude(stream, 1, 'e', 't')
     assert result.status == 'failed' and result.summary == 'exhausted'
+
+
+def test_claude_window_that_reset_since_reading_is_unknown(tmp_path, monkeypatch):
+    # Observed live: a pre-reset 94% seven_day reading kept supplying 6% headroom after the reset.
+    monkeypatch.setattr(quota, 'STATE', tmp_path)
+    monkeypatch.setattr(quota, 'CLAUDE_CACHE', tmp_path / 'c.jsonl')
+    quota.record_claude([{'status': 'allowed_warning', 'rateLimitType': 'seven_day', 'utilization': 0.94,
+                          'resetsAt': int((NOW - timedelta(hours=1)).timestamp())}], now=NOW - timedelta(hours=3))
+    quota.record_claude([{'status': 'allowed', 'rateLimitType': 'five_hour',
+                          'resetsAt': int((NOW + timedelta(hours=4)).timestamp())}], now=NOW)
+    obs, windows = quota.claude_observation(tmp_path / 'c.jsonl')
+    assert obs.status == 'available' and obs.headroom is None
+    assert {w['name']: w['used'] for w in windows} == {'five_hour': None, 'seven_day': None}

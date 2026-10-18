@@ -112,7 +112,7 @@ def test_claude_safe_stdin_command_synthetic(monkeypatch):
     adapter = ClaudeAdapter()
     monkeypatch.setattr(adapter, 'probe', lambda: {'status': 'available', 'version': '2.1.240 (Claude Code)'})
     seen = {}
-    def fake_run(command, prompt, cwd, env, timeout):
+    def fake_run(command, prompt, cwd, env, timeout, should_stop=None):
         seen.update(command=command, prompt=prompt, env=env)
         envelope = {'type': 'result', 'subtype': 'success', 'is_error': False,
             'structured_output': {'summary': 'ok', 'findings': [], 'source_refs': [], 'unresolved': []}}

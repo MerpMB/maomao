@@ -101,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {'error': 'unknown run'})
             return self._send(200, {**run_summary(run), 'diff': run['diff'], 'routing': run['routing'],
                 'artifact': run['artifact'], 'base_commit': run['base_commit'],
-                'timeout': run['timeout'], 'events': ledger.events(run['id'])})
+                'timeout': run['timeout'], 'parent': run.get('parent'), 'events': ledger.events(run['id'])})
         self._send(404, {'error': 'not found'})
 
     def server_runner_alive(self):
@@ -132,6 +132,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {'paused': body['paused']})
         if parts == ['', 'api', 'runs']:
             return self._submit(ledger, body)
+        if len(parts) == 5 and parts[:3] == ['', 'api', 'runs'] and parts[4] == 'revise':
+            feedback = body.get('feedback')
+            if not isinstance(feedback, str) or not feedback.strip() or len(feedback) > 2000:
+                return self._send(400, {'error': 'feedback must be 1-2000 characters'})
+            if not ledger.run(parts[3]):
+                return self._send(404, {'error': 'unknown run'})
+            new_id = ops.revise(ledger, parts[3], feedback)
+            if not new_id:
+                return self._send(409, {'error': f'not allowed in status {ledger.status(parts[3])}'})
+            return self._send(201, {'id': new_id})
         if len(parts) == 5 and parts[:3] == ['', 'api', 'runs'] and parts[4] in ('approve', 'reject', 'cancel'):
             if not ledger.run(parts[3]):
                 return self._send(404, {'error': 'unknown run'})

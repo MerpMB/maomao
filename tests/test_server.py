@@ -139,3 +139,17 @@ def test_approve_and_reject_over_api(api, repo):
     assert status == 409 and body['status'] == 'applied'
     assert post(port, f'/api/runs/{run_id}/approve', {}, token)[0] == 409  # fixture diff does not apply
     assert post(port, '/api/runs/r-missing/approve', {}, token)[0] == 404
+
+
+def test_revise_over_api(api, repo):
+    port, _ = api
+    token = server.Handler.token
+    ledger = Ledger(server.Handler.db_path)
+    first = post(port, '/api/runs', {'objective': 'edit', 'repo': str(repo)}, token)[1]['id']
+    assert post(port, f'/api/runs/{first}/revise', {'feedback': 'more'}, token)[0] == 409  # still queued
+    ledger.transition(first, ['queued'], 'needs_approval', diff='x')
+    assert post(port, f'/api/runs/{first}/revise', {'feedback': ''}, token)[0] == 400
+    status, body = post(port, f'/api/runs/{first}/revise', {'feedback': 'also add tests'}, token)
+    assert status == 201
+    detail = json.loads(get(port, f"/api/runs/{body['id']}")[1])
+    assert detail['parent'] == first and detail['status'] == 'queued'

@@ -27,14 +27,16 @@ class Ledger:
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript(SCHEMA)
+        if 'parent' not in {r[1] for r in self.db.execute('PRAGMA table_info(runs)')}:
+            self.db.execute('ALTER TABLE runs ADD COLUMN parent TEXT')  # M5: fix-round lineage
 
-    def submit(self, task, repo, timeout=900):
+    def submit(self, task, repo, timeout=900, parent=None):
         run_id = 'r-' + uuid4().hex[:8]
         now = _now()
-        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout))
-        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo))
+        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout, parent) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout, parent))
+        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo), parent=parent)
         return run_id
 
     def update(self, run_id, **fields):

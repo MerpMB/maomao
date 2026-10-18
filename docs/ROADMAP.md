@@ -97,6 +97,17 @@ git repo with a commit, timeout 30–3600 s). Verified for real: browser submit 
 **Cut on purpose (ultra):** reserve toggles and per-pool `limit_action`. No reserves are configured, and `route()`
 already skips exhausted pools, which in effect is `rotate`. Add these when a second account or a reserve policy actually exists.
 
+**M5 — Cross-vendor review + revise. ✅ DONE 2026-10-18.** Every diff gets a tool-free snapshot review by the
+*other* vendor before it reaches `needs_approval` (objective + diff + the author's artifact). The verdict is a summary that starts
+with `APPROVE:` or `CHANGES:` and is shown as a badge next to Approve. A review is skipped with a reason, and never blocks approval, when
+there is no other vendor or the diff exceeds the 16 KiB packet (`# shortcut:`). **Revise** sends a diff back with feedback:
+the run becomes `revised` (Superseded), and a child run (`parent`) starts from the previous diff, so the operator approves one
+cumulative diff. CLI: `ops revise ID "feedback"`. Verified for real: Codex implemented, Claude reviewed with `CHANGES:`
+and caught a mismatch between the objective and the repo, a revision added tests, the re-review said `APPROVE:`, and approve
+applied it with the worker's tests passing. Lessons: the review prompt must say the diff is cumulative against the base. One review
+returned placeholder output ("test"); it shows as "No verdict" rather than a false approve, and a rerun was fine.
+Fixed from live data: a Claude window whose reset time has passed now reads unknown instead of its stale pre-reset %.
+
 **Later (only when a need shows up):** parallel runs, auto-rotation across several accounts, notifications,
 fix-round session resume, more runtimes (Gemini/OpenCode).
 

@@ -92,6 +92,9 @@ def claude_observation(cache=CLAUDE_CACHE):
                         'resets_at': _ts(info['resetsAt']) if isinstance(info.get('resetsAt'), (int, float)) else None,
                         'exhausted': info.get('status') == 'rejected', 'status': info.get('status')})
     observed = max(datetime.fromisoformat(r['observed_at']) for r in latest.values())
+    for w in windows:
+        if w['resets_at'] and w['resets_at'] <= observed:  # window has reset since that reading
+            w.update(used=None, exhausted=False, status='reset since last seen')
     exhausted = any(w['exhausted'] for w in windows)
     return _observation('claude-local', 'claude stream-json rate_limit_event', observed, windows, exhausted), windows
 
