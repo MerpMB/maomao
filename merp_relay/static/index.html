@@ -31,7 +31,10 @@ header .sp { flex: 1; }
 main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; padding: 16px 20px; }
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; overflow-x: auto; }
 section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 0 0 10px; }
-#pools, #new { grid-column: 1 / -1; }
+#pools, #new, #inbox { grid-column: 1 / -1; }
+#inbox { border-color: var(--warning); } #inbox[hidden] { display: none; }
+.question { border-bottom: 1px solid var(--line); padding: 8px 0; display: grid; gap: 6px; }
+.question:last-child { border-bottom: 0; }
 #pools { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .pool h3 { margin: 0 0 2px; font-size: 15px; display: flex; gap: 8px; align-items: baseline; }
 .meta { color: var(--muted); font-size: 12px; }
@@ -96,6 +99,8 @@ textarea { resize: vertical; min-height: 64px; }
   <button class="theme" id="theme" type="button" aria-label="Toggle color theme">Theme</button>
 </header>
 <main>
+  <section id="inbox" aria-labelledby="inbox-h" hidden><h2 id="inbox-h">Inbox — the lead is asking</h2>
+    <div id="questions"></div></section>
   <div id="pools" aria-live="polite"></div>
   <section id="new" aria-labelledby="new-h"><h2 id="new-h">New task</h2>
     <form class="submit" id="submit-form">

@@ -229,6 +229,9 @@ function eventText(e) {
   if (e.type === 'apply_failed') return d.reason || '';
   if (e.type === 'submitted') return `${d.kind} in ${d.repo}`;
   if (e.type === 'setting') return `${d.key} = ${d.value}`;
+  if (e.type === 'decision') return `${d.by} ${d.action}` + (d.reason ? ` — ${d.reason}` : '');
+  if (e.type === 'question') return `${d.asked_by} asks: ${d.question}`;
+  if (e.type === 'answer') return `owner answered ${d.id}`;
   if (e.type === 'review_started') return `reviewer ${d.reviewer}`;
   if (e.type === 'reviewed') return `${d.reviewer}: ${(d.result && d.result.summary || '').slice(0, 80)}`;
   if (e.type === 'review_skipped') return d.reason;
@@ -255,6 +258,7 @@ function connect() {
     if (e.run_id === selected) loadDetail();
     if (e.type === 'worker_finished') loadPools();  // a finished run may carry fresh quota
     if (e.type === 'setting' || e.type === 'submitted') loadStatus();
+    if (e.type === 'question' || e.type === 'answer') loadInbox();
   };
 }
 
@@ -266,6 +270,28 @@ function theme() {
     root.dataset.theme = dark ? 'light' : 'dark';
     try { localStorage.setItem('relay-theme', root.dataset.theme); } catch (_) {}
   });
+}
+
+async function loadInbox() {
+  let questions;
+  try { questions = await getJSON('/api/inbox'); } catch (_) { return; }
+  const open = questions.filter((q) => q.status === 'open');
+  document.getElementById('inbox').hidden = open.length === 0;
+  document.getElementById('questions').replaceChildren(...open.map((q) => {
+    const area = el('textarea', { maxlength: '4000', 'aria-label': `Answer to ${q.id}` });
+    const send = el('button', { type: 'button', class: 'primary' }, 'Answer');
+    const notice = el('div', { class: 'notice error', role: 'alert', hidden: '' });
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try { await post(`/api/inbox/${encodeURIComponent(q.id)}/answer`, { answer: area.value }); loadInbox(); }
+      catch (err) { notice.textContent = err.message; notice.hidden = false; }
+      finally { send.disabled = false; }
+    });
+    return el('div', { class: 'question' },
+      el('div', { class: 'meta' }, `${q.asked_by} · ${ago(q.created_at)} ago`, q.project ? ` · ${q.project}` : '',
+        q.run_id ? [' · ', runLink(q.run_id)] : null),
+      el('div', {}, q.question), area, el('div', { class: 'actions' }, send), notice);
+  }));
 }
 
 let status = null;
@@ -312,6 +338,7 @@ document.getElementById('submit-form').addEventListener('submit', async (ev) => 
 
 theme();
 loadStatus(); setInterval(loadStatus, 10000);
+loadInbox(); setInterval(loadInbox, 15000);
 const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
 tick(); setInterval(tick, 1000);
 loadPools(); setInterval(loadPools, 30000);

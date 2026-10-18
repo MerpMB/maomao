@@ -141,6 +141,18 @@ def test_approve_and_reject_over_api(api, repo):
     assert post(port, '/api/runs/r-missing/approve', {}, token)[0] == 404
 
 
+def test_inbox_answer_over_api(api):
+    port, _ = api
+    token = server.Handler.token
+    ledger = Ledger(server.Handler.db_path)
+    qid = ledger.ask('Ship it?', asked_by='lead')
+    assert [q['id'] for q in json.loads(get(port, '/api/inbox')[1])] == [qid]
+    assert post(port, f'/api/inbox/{qid}/answer', {'answer': ''}, token)[0] == 400
+    assert post(port, f'/api/inbox/{qid}/answer', {'answer': 'yes'}, token) == (200, {'status': 'answered'})
+    assert post(port, f'/api/inbox/{qid}/answer', {'answer': 'again'}, token)[0] == 409
+    assert post(port, f'/api/inbox/{qid}/answer', {'answer': 'x'})[0] == 403
+
+
 def test_revise_over_api(api, repo):
     port, _ = api
     token = server.Handler.token

@@ -1,6 +1,7 @@
 """Serial worktree runner and operator CLI. Nothing reaches a repository without `approve`."""
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -59,13 +60,13 @@ def review_dispatch(adapter, task, packet, should_stop):
     return execute_snapshot(adapter, task, packet, weaker_experiment=True, timeout=300, should_stop=should_stop)
 
 
-def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, parent=None):
+def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, parent=None, worker=None):
     repo = Path(repo).resolve()
     git(repo, 'rev-parse', 'HEAD')  # must be a git repository with a commit
     task = TaskRequest(task_id='t-' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'), objective=objective,
         kind=kind, execution_mode='repository_access', read_scope=('.',),
         completion_criteria=tuple(criteria) or ('Objective met with changes limited to the worktree',))
-    return ledger.submit(task, repo, timeout, parent)
+    return ledger.submit(task, repo, timeout, parent, worker)
 
 
 def review(ledger, run_id, objective, artifact, diff, profiles, author):
@@ -100,7 +101,9 @@ def process(ledger, run_id):
     task, repo = TaskRequest.model_validate(run['task']), Path(run['repo'])
     profiles = available_profiles()
     obs = observations()
-    decision = route(task, [p for _, p in profiles.values()], obs, [], PREFERENCE,
+    # A lead-chosen worker narrows the candidates; quota and eligibility still apply.
+    candidates = {k: v for k, v in profiles.items() if not run.get('worker') or k == run['worker']}
+    decision = route(task, [p for _, p in candidates.values()], obs, [], PREFERENCE,
                      datetime.now(timezone.utc), 'ops-default', contained=True)
     ledger.update(run_id, routing=decision.model_dump(mode='json'), resource_id=decision.selected)
     ledger.event(run_id, 'routed', selected=decision.selected, rationale=decision.rationale,
@@ -151,12 +154,58 @@ def recover(ledger):
         git(ledger.run(run_id)['repo'], 'worktree', 'prune', check=False)
 
 
+class RunnerLock:
+    """One runner per machine across processes; the OS releases the lock if its holder dies."""
+    def __init__(self, path=STATE / 'runner.lock'):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.file = open(path, 'a+b')
+
+    def acquire(self):
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                self.file.seek(0)
+                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+
+    def release(self):
+        if os.name == 'nt':
+            import msvcrt
+            self.file.seek(0)
+            msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.file, fcntl.LOCK_UN)
+
+
+def runner_active():
+    probe = RunnerLock()
+    if probe.acquire():
+        probe.release()
+        return False
+    return True
+
+
+def run_forever(ledger_factory, retry=15):
+    """Become the runner when nobody else is (dashboard and MCP server both call this)."""
+    lock = RunnerLock()
+    while not lock.acquire():
+        time.sleep(retry)
+    work(ledger_factory(), watch=True)
+
+
 def paused(ledger):
     return ledger.setting('paused') == '1'
 
 
 def work(ledger, watch=False):
-    """Serial loop. Pause stops new pickups; a run already in flight finishes or is cancelled."""
+    """Serial loop. Pause stops new pickups; a run already in flight finishes or is cancelled.
+    Callers hold RunnerLock (run_forever, `ops work`), so recover() never fails another runner's run."""
     recover(ledger)
     while True:
         queued = [] if paused(ledger) else ledger.with_status('queued')
@@ -242,6 +291,8 @@ def main(argv=None):
     if args.command == 'submit':
         print(submit(ledger, args.repo, args.objective, args.kind, args.criteria, args.timeout))
     elif args.command == 'work':
+        if not RunnerLock().acquire():
+            sys.exit('another runner is active (dashboard or MCP server)')
         work(ledger, args.watch)
     elif args.command == 'list':
         for r in ledger.runs():
