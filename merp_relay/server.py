@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from . import ops
+from . import ops, trace
 from .ledger import Ledger
 from .quota import STATE, claude_observation, codex_observation, refresh
 
@@ -97,6 +97,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, [run_summary(r) for r in ledger.runs(100)])
         if path == '/api/inbox':
             return self._send(200, ledger.questions(limit=30))
+        hq = ledger.setting('hq_path')
+        if path == '/api/projects':
+            return self._send(200, {'hq': hq, 'projects': trace.projects(hq) if hq else []})
+        if path.startswith('/api/projects/'):
+            found = trace.trace(ledger, hq, path.rsplit('/', 1)[1]) if hq else None
+            return self._send(200, found) if found else self._send(404, {'error': 'unknown project'})
         if path.startswith('/api/runs/'):
             run = ledger.run(path.rsplit('/', 1)[1])
             if not run:

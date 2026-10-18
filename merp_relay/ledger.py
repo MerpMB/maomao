@@ -31,17 +31,18 @@ class Ledger:
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript(SCHEMA)
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(runs)')}
-        for name in ('parent', 'worker', 'options', 'depends_on'):  # M5 lineage; V2 worker, tiers, ordering
+        for name in ('parent', 'worker', 'options', 'depends_on', 'project'):  # M5 lineage; V2 lead fields
             if name not in columns:
                 self.db.execute(f'ALTER TABLE runs ADD COLUMN {name} TEXT')
 
-    def submit(self, task, repo, timeout=900, parent=None, worker=None, options=None, depends_on=None):
+    def submit(self, task, repo, timeout=900, parent=None, worker=None, options=None, depends_on=None, project=None):
         run_id = 'r-' + uuid4().hex[:8]
         now = _now()
         self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout, parent, worker, '
-                        'options, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        'options, depends_on, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout, parent, worker,
-                         json.dumps(options) if options else None, json.dumps(depends_on) if depends_on else None))
+                         json.dumps(options) if options else None, json.dumps(depends_on) if depends_on else None,
+                         project))
         self.event(run_id, 'submitted', kind=task.kind, repo=str(repo), parent=parent, worker=worker,
                    options=options, depends_on=depends_on)
         return run_id

@@ -96,7 +96,8 @@ def t_dispatch(ledger, args):
         raise ValueError('depends_on must be a list of run ids')
     run_id = ops.submit(ledger, repo, _arg(args, 'objective', str, limit=4000).strip(), kind,
                         args.get('criteria') or (), timeout, worker=worker,
-                        options={'model': args.get('model'), 'effort': args.get('effort')}, depends_on=depends_on)
+                        options={'model': args.get('model'), 'effort': args.get('effort')}, depends_on=depends_on,
+                        project=args.get('project'))
     return {'run_id': run_id, 'status': 'queued',
             'note': 'starts after dependencies are applied' if depends_on else None}
 
@@ -223,7 +224,7 @@ TOOLS = {
                  {'objective': S, 'repo': S, 'kind': {'type': 'string', 'enum': ['IMPLEMENT', 'INVESTIGATE', 'REVIEW']},
                   'worker': {'type': 'string', 'enum': ['codex', 'claude']}, 'model': S,
                   'effort': {'type': 'string', 'enum': list(ops.EFFORTS)}, 'timeout': {'type': 'integer'},
-                  'depends_on': {'type': 'array', 'items': S},
+                  'depends_on': {'type': 'array', 'items': S}, 'project': S,
                   'criteria': {'type': 'array', 'items': S}}, ['objective', 'repo']),
     'runs': (t_runs, 'Recent runs (optionally filter by status).', {'status': S, 'limit': {'type': 'integer'}}),
     'report': (t_report, 'Full report for one run: worker result, cross-vendor review, approval blockers, diff.',
@@ -286,6 +287,8 @@ def handle(message, ledger):
 
 def main():
     ledger = Ledger()
+    if (hq_dir() / 'AGENTS.md').exists():  # tell the dashboard where RelayHQ is, for project traces
+        ledger.set_setting('hq_path', str(hq_dir().resolve()))
     out = sys.stdout.buffer
     sys.stdout = sys.stderr  # stdout belongs to the protocol; stray prints (runner) go to stderr
     # The lead's dispatches must run even without the dashboard; the lock keeps it to one runner.

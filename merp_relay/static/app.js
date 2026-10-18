@@ -264,6 +264,7 @@ function connect() {
     if (e.type === 'worker_finished') loadPools();  // a finished run may carry fresh quota
     if (e.type === 'setting' || e.type === 'submitted') loadStatus();
     if (e.type === 'question' || e.type === 'answer') loadInbox();
+    if (['decision', 'reviewed', 'submitted', 'answer', 'applied'].includes(e.type)) loadTrace();
   };
 }
 
@@ -298,6 +299,46 @@ async function loadInbox() {
       el('div', {}, q.question), area, el('div', { class: 'actions' }, send), notice);
   }));
 }
+
+const KIND = { journal: ['Journal', '--accent'], dispatch: ['Dispatch', '--muted'], routed: ['Routed', '--muted'],
+  review: ['Review', '--muted'], decision: ['Decision', '--good'], status: ['Status', '--muted'],
+  question: ['Question', '--warning'], answer: ['Answer', '--good'] };
+const VERDICT = { approve: '--good', changes: '--warning', skipped: '--muted', none: '--muted' };
+
+async function loadProjects() {
+  let data;
+  try { data = await getJSON('/api/projects'); } catch (_) { return; }
+  const select = document.getElementById('project');
+  const current = select.value;
+  select.replaceChildren(...data.projects.map((p) => el('option', { value: p }, p)));
+  if (data.projects.includes(current)) select.value = current;
+  if (data.projects.length) loadTrace();
+}
+
+async function loadTrace() {
+  const name = document.getElementById('project').value;
+  if (!name) return;
+  let t;
+  try { t = await getJSON(`/api/projects/${encodeURIComponent(name)}`); } catch (_) { return; }
+  const counts = Object.entries(t.run_counts).map(([k, v]) => `${v} ${(STATUS[k] || [k])[0].toLowerCase()}`).join(' · ');
+  document.getElementById('trace-meta').textContent = counts ? `Runs: ${counts}` : 'No runs yet';
+  const doc = (label, text, open) => text ? el('details', open ? { open: '' } : {}, el('summary', {}, label),
+    el('pre', { class: 'doc' }, text)) : null;
+  document.getElementById('trace-body').replaceChildren(
+    doc('State (state.md)', t.state, true), doc('Brief (brief.md)', t.brief), doc('Decisions (decisions.md)', t.decisions),
+    el('ol', { class: 'timeline', 'aria-label': `Timeline for ${name}` }, t.timeline.slice().reverse().map((item) => {
+      const [label, color] = KIND[item.kind] || [item.kind, '--muted'];
+      const tone = item.kind === 'review' ? VERDICT[item.verdict] || '--muted' : color;
+      return el('li', {},
+        el('span', { class: 'mono meta', title: item.at }, new Date(item.at).toLocaleString([], {
+          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })),
+        el('span', {}, el('span', { class: 'badge', style: `--sc: var(${tone})` }, label)),
+        el('div', {}, el('div', {}, item.run ? [runLink(item.run), ' '] : null, item.title,
+          (item.runs || []).length ? [' · ', item.runs.map((r, i) => [i ? ', ' : '', runLink(r)])] : null),
+          item.text ? el('div', { class: 'text' }, item.text) : null));
+    })));
+}
+document.getElementById('project').addEventListener('change', loadTrace);
 
 let status = null;
 async function loadStatus() {
@@ -356,6 +397,7 @@ document.getElementById('submit-form').addEventListener('submit', async (ev) => 
 theme();
 loadStatus(); setInterval(loadStatus, 10000);
 loadInbox(); setInterval(loadInbox, 15000);
+loadProjects(); setInterval(loadProjects, 30000);
 const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
 tick(); setInterval(tick, 1000);
 loadPools(); setInterval(loadPools, 30000);

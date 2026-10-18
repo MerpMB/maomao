@@ -31,7 +31,15 @@ header .sp { flex: 1; }
 main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; padding: 16px 20px; }
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; overflow-x: auto; }
 section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 0 0 10px; }
-#pools, #new, #inbox { grid-column: 1 / -1; }
+#pools, #new, #inbox, #trace { grid-column: 1 / -1; }
+#trace details { margin: 6px 0; } #trace summary { cursor: pointer; color: var(--ink-2); }
+#trace pre.doc { white-space: pre-wrap; font: 13px/1.5 var(--mono); background: var(--bg); padding: 8px 10px;
+  border-radius: 6px; max-height: 320px; overflow: auto; margin: 6px 0 0; }
+ol.timeline { list-style: none; margin: 8px 0 0; padding: 0; }
+ol.timeline li { display: grid; grid-template-columns: 92px 92px 1fr; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--line); }
+ol.timeline .text { white-space: pre-wrap; color: var(--ink-2); font-size: 13px; }
+@media (max-width: 640px) { ol.timeline li { grid-template-columns: 1fr; gap: 2px; } }
 #inbox { border-color: var(--warning); } #inbox[hidden] { display: none; }
 .question { border-bottom: 1px solid var(--line); padding: 8px 0; display: grid; gap: 6px; }
 .question:last-child { border-bottom: 0; }
@@ -53,6 +61,7 @@ tbody tr { cursor: pointer; } tbody tr:hover { background: var(--bg); }
 tbody tr[aria-selected="true"] { background: var(--bg); box-shadow: inset 3px 0 var(--accent); }
 td.obj { max-width: 0; width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--mono); font-size: 12.5px; }
+a { color: var(--accent); }
 td.mono { white-space: nowrap; }
 .empty { color: var(--muted); padding: 18px 0; text-align: center; }
 #detail .kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 10px; margin-bottom: 12px; }
@@ -125,6 +134,11 @@ textarea { resize: vertical; min-height: 64px; }
   </section>
   <section id="detail" aria-labelledby="detail-h"><h2 id="detail-h">Run detail</h2>
     <div class="empty">Select a run.</div></section>
+  <section id="trace" aria-labelledby="trace-h"><h2 id="trace-h">Project trace</h2>
+    <div class="actions"><label class="meta">Project <select id="project"></select></label>
+      <span class="meta" id="trace-meta"></span></div>
+    <div id="trace-body"><div class="empty">No RelayHQ projects yet. Start a lead (lead-sol.ps1 / lead-opus.ps1) once so the dashboard learns where RelayHQ is.</div></div>
+  </section>
   <section id="feed" aria-labelledby="feed-h"><h2 id="feed-h">Event feed</h2><ol class="events" id="events"></ol></section>
 </main>
 <script src="/app.js"></script>

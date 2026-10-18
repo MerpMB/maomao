@@ -183,6 +183,12 @@ config/secrets/CI files, more than N files). The owner commits.
   Windows), so the reviewer asked for changes and the lead re-pinned those tasks to Codex. This is now in the lead guidance.
 - **P2 — Parallel + tiers:** N slots per pool (worktrees already isolate), worker tiers by model and effort (Codex `-m`,
   `model_reasoning_effort`; Claude `--model`), `depends_on` task tree.
+- **P3 ✅ DONE 2026-10-18.** `merp_relay/trace.py` and a dashboard **Project trace** section show each RelayHQ project's
+  `state.md` (open), brief and decisions, plus one timeline: journal entries (`## HH:MM <project> — …`, linked to the run
+  IDs they mention), dispatches (tier, dependencies, lineage), routing, reviews with verdicts, lead and owner decisions with
+  reasons, status changes, and owner questions and answers. Runs belong to a project through `dispatch(project=…)` or by being
+  mentioned in its journal, so older runs are covered. The MCP server records RelayHQ's path in the ledger, so the dashboard
+  finds it with no configuration. Verified in the browser on the demo project (50 timeline items).
 - **P3 — Trace view:** dashboard view from journal/brief → subtasks → runs → reviews → decisions, plus inbox answers.
 - **P4 — More runtimes:** Cursor CLI, local models through a headless harness, Grok (API key, explicit opt-in).
 
