@@ -147,7 +147,11 @@ function runLink(id) {
 
 function lineage(r) {
   const next = r.events.filter((e) => e.type === 'revision_queued').map((e) => e.data.next)[0];
-  return [r.parent ? [el('dt', {}, 'Revision of'), el('dd', {}, runLink(r.parent))] : null,
+  const opts = Object.entries(r.options || {}).map(([k, v]) => `${k} ${v}`).join(' · ');
+  return [r.requested_worker ? [el('dt', {}, 'Requested'), el('dd', {}, r.requested_worker)] : null,
+          opts ? [el('dt', {}, 'Tier'), el('dd', {}, opts)] : null,
+          (r.depends_on || []).length ? [el('dt', {}, 'Depends on'), el('dd', {}, r.depends_on.map((d, i) => [i ? ', ' : '', runLink(d)]))] : null,
+          r.parent ? [el('dt', {}, 'Revision of'), el('dd', {}, runLink(r.parent))] : null,
           next ? [el('dt', {}, 'Superseded by'), el('dd', {}, runLink(next))] : null];
 }
 

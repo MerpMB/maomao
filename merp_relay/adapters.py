@@ -276,7 +276,7 @@ REPO_PROMPT = ('Authorized repository task follows. The current directory is a d
     'AUTHORIZED_TASK\n')
 
 
-def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None):
+def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None, model=None, effort=None):
     """Worker edits a disposable worktree under the runtime's own edit sandbox; the worktree is the containment."""
     identity = str(uuid4())
     if task.execution_mode != 'repository_access' or task.tools:
@@ -296,13 +296,15 @@ def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None):
             command = [shutil.which('claude'), '-p', '--safe-mode', '--tools', 'Read,Edit,Write,Glob,Grep',
                 '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--no-chrome',
                 '--disable-slash-commands', '--permission-mode', 'acceptEdits', '--no-session-persistence',
-                '--output-format', 'stream-json', '--verbose', '--json-schema', schema.read_text()]
+                '--output-format', 'stream-json', '--verbose', '--json-schema', schema.read_text(),
+                *(['--model', model] if model else []), *(['--effort', effort] if effort else [])]
         else:
             command = [codex_executable(), 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
                 '--skip-git-repo-check', '--sandbox', 'workspace-write', '--json',
                 # Without user config, Windows falls back to a read-only sandbox.
                 *(['-c', 'windows.sandbox="elevated"'] if os.name == 'nt' else []),
                 '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
+                *(['-m', model] if model else []), *(['-c', f'model_reasoning_effort="{effort}"'] if effort else []),
                 '--output-schema', str(schema), '-']
         try:
             stdout, code, cancellation = run_bounded(command, REPO_PROMPT + task.model_dump_json(),
@@ -310,7 +312,7 @@ def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None):
         except OSError:
             return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
                 summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}
-    metrics = {'runtime_version': probe.get('version'), 'cancellation': cancellation}
+    metrics = {'runtime_version': probe.get('version'), 'cancellation': cancellation, 'model': model, 'effort': effort}
     if cancellation:
         stopped = cancellation.get('local_process_exited') is True
         return AgentResult(execution_id=identity, task_id=task.task_id,

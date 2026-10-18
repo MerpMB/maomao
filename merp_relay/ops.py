@@ -2,7 +2,10 @@
 import argparse
 import json
 import os
+import re
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
 import time
@@ -17,6 +20,11 @@ from .routing import route
 from .snapshot import SourceInput, SourcePacket
 
 PREFERENCE = ['codex', 'claude']
+SLOTS, PER_WORKER = 3, 2  # defaults; ledger settings 'slots' / 'per_worker' override
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')  # 'ultra' excluded: it delegates on its own
+MODEL = re.compile(r'^[A-Za-z0-9._-]{1,64}$')
+TERMINAL_OK = ('applied', 'completed')
+TERMINAL_BAD = ('failed', 'rejected', 'cancelled', 'blocked')
 WORKTREES = STATE / 'worktrees'
 ACTIVE = ('running', 'cancel_requested')
 REVIEW_OBJECTIVE = ('Review proposed.diff against the operator objective in objective.txt and the author worker\'s '
@@ -52,21 +60,50 @@ def observations():
     return [o for o, _ in (claude_observation(), codex_observation()) if o]
 
 
-def dispatch(adapter, task, cwd, timeout, should_stop):
-    return execute_repo(adapter, task, cwd, timeout=timeout, should_stop=should_stop)
+def dispatch(adapter, task, cwd, timeout, should_stop, options=None):
+    options = options or {}
+    return execute_repo(adapter, task, cwd, timeout=timeout, should_stop=should_stop,
+                        model=options.get('model'), effort=options.get('effort'))
+
+
+def models():
+    """Selectable models per worker: Codex lists its own; Claude takes aliases or full ids."""
+    codex = []
+    try:
+        cache = json.loads((Path.home() / '.codex' / 'models_cache.json').read_text(encoding='utf-8'))
+        codex = [m['slug'] for m in cache.get('models', []) if m.get('visibility') == 'list' and m.get('slug')]
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return {'codex': codex, 'claude': ['haiku', 'sonnet', 'opus', 'claude-opus-5-5'], 'efforts': list(EFFORTS)}
+
+
+def validate_options(options):
+    options = {k: v for k, v in (options or {}).items() if v not in (None, '')}
+    if set(options) - {'model', 'effort', 'fresh'}:
+        raise ValueError('options may only contain model, effort, fresh')
+    if 'effort' in options and options['effort'] not in EFFORTS:
+        raise ValueError(f'effort must be one of {", ".join(EFFORTS)}')
+    if 'model' in options and not (isinstance(options['model'], str) and MODEL.match(options['model'])):
+        raise ValueError('model must be a plain model id such as gpt-6.1-sol or sonnet')
+    return options or None
 
 
 def review_dispatch(adapter, task, packet, should_stop):
     return execute_snapshot(adapter, task, packet, weaker_experiment=True, timeout=300, should_stop=should_stop)
 
 
-def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, parent=None, worker=None):
+def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, parent=None, worker=None,
+           options=None, depends_on=None):
     repo = Path(repo).resolve()
     git(repo, 'rev-parse', 'HEAD')  # must be a git repository with a commit
+    options = validate_options(options)
+    for dep in depends_on or ():
+        if not ledger.run(dep):
+            raise ValueError(f'unknown dependency {dep}')
     task = TaskRequest(task_id='t-' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'), objective=objective,
         kind=kind, execution_mode='repository_access', read_scope=('.',),
         completion_criteria=tuple(criteria) or ('Objective met with changes limited to the worktree',))
-    return ledger.submit(task, repo, timeout, parent, worker)
+    return ledger.submit(task, repo, timeout, parent, worker, options, list(depends_on or ()) or None)
 
 
 def review(ledger, run_id, objective, artifact, diff, profiles, author):
@@ -93,35 +130,72 @@ def review(ledger, run_id, objective, artifact, diff, profiles, author):
                  metrics=metrics)
 
 
-def process(ledger, run_id):
+def choose(run, profiles, busy=()):
+    """Route one run. A lead-chosen worker narrows the candidates; quota, eligibility and capacity apply."""
+    task = TaskRequest.model_validate(run['task'])
+    candidates = {k: v for k, v in profiles.items()
+                  if (not run.get('worker') or k == run['worker']) and k not in busy}
+    return route(task, [p for _, p in candidates.values()], observations(), [], PREFERENCE,
+                 datetime.now(timezone.utc), 'ops-default', contained=True)
+
+
+def dependency_state(ledger, run):
+    """'ready', 'wait', or a blocking reason. A revised dependency is followed to its latest attempt."""
+    for dep in run.get('depends_on') or ():
+        status = ledger.status(dep)
+        while status == 'revised':
+            nxt = [e['data']['next'] for e in ledger.events(dep) if e['type'] == 'revision_queued']
+            if not nxt:
+                break
+            dep, status = nxt[-1], ledger.status(nxt[-1])
+        if status in TERMINAL_BAD or status is None:
+            return f'dependency {dep} is {status or "missing"}'
+        if status not in TERMINAL_OK:
+            return 'wait'
+    return 'ready'
+
+
+def staged_base(repo, worktree):
+    """Start from HEAD plus what is already staged (approved earlier, or the owner's own staging),
+    so dependent work builds on approved changes. Returns the commit the diff is taken against."""
+    staged = git(repo, 'diff', '--cached', '--binary', 'HEAD')
+    if staged:
+        git(worktree, 'apply', '--index', '--binary', '-', stdin=staged)
+        git(worktree, '-c', 'user.name=Relay', '-c', 'user.email=relay@relay.invalid',
+            'commit', '-q', '--no-verify', '-m', 'relay base: staged changes')
+    return git(worktree, 'rev-parse', 'HEAD').strip()
+
+
+def process(ledger, run_id, decision=None):
     """Run one queued task in a fresh worktree; capture its diff and remove the worktree."""
     if not ledger.transition(run_id, ['queued'], 'running'):
         return ledger.status(run_id)
     run = ledger.run(run_id)
     task, repo = TaskRequest.model_validate(run['task']), Path(run['repo'])
+    options = run.get('options') or {}
     profiles = available_profiles()
-    obs = observations()
-    # A lead-chosen worker narrows the candidates; quota and eligibility still apply.
-    candidates = {k: v for k, v in profiles.items() if not run.get('worker') or k == run['worker']}
-    decision = route(task, [p for _, p in candidates.values()], obs, [], PREFERENCE,
-                     datetime.now(timezone.utc), 'ops-default', contained=True)
+    decision = decision or choose(run, profiles)
     ledger.update(run_id, routing=decision.model_dump(mode='json'), resource_id=decision.selected)
     ledger.event(run_id, 'routed', selected=decision.selected, rationale=decision.rationale,
                  excluded=decision.excluded)
     if not decision.selected:
         ledger.transition(run_id, ACTIVE, 'blocked', summary=decision.rationale)
         return 'blocked'
-    parent = ledger.run(run['parent']) if run.get('parent') else None
-    base = parent['base_commit'] if parent else git(repo, 'rev-parse', 'HEAD').strip()
+    parent = ledger.run(run['parent']) if run.get('parent') and not options.get('fresh') else None
     worktree = WORKTREES / run_id
-    ledger.update(run_id, base_commit=base)
     diff = ''
     try:
-        git(repo, 'worktree', 'add', '--detach', str(worktree), base)
         if parent:  # fix round: start from the previous attempt so the new diff is cumulative
+            base = parent['base_commit']
+            git(repo, 'worktree', 'add', '--detach', str(worktree), base)
             git(worktree, 'apply', '--index', '--binary', '-', stdin=parent['diff'])
+        else:
+            git(repo, 'worktree', 'add', '--detach', str(worktree), 'HEAD')
+            base = staged_base(repo, worktree)
+        ledger.update(run_id, base_commit=base)
         result, metrics = dispatch(profiles[decision.selected][0], task, worktree, run['timeout'],
-                                   lambda: ledger.status(run_id) == 'cancel_requested')
+                                   lambda: ledger.status(run_id) == 'cancel_requested',
+                                   **({'options': options} if options.get('model') or options.get('effort') else {}))
         if result.status == 'completed':
             git(worktree, 'add', '-A')
             diff = git(worktree, 'diff', '--cached', '--binary', base)
@@ -203,21 +277,53 @@ def paused(ledger):
     return ledger.setting('paused') == '1'
 
 
+def _run_in_thread(path, run_id, decision):
+    ledger = Ledger(path)  # sqlite connections stay per thread
+    try:
+        print(run_id, process(ledger, run_id, decision), flush=True)
+    except Exception as e:  # e.g. the repository vanished; the runner must survive
+        ledger.transition(run_id, ['queued', *ACTIVE], 'failed', summary=f'runner error: {type(e).__name__}')
+
+
 def work(ledger, watch=False):
-    """Serial loop. Pause stops new pickups; a run already in flight finishes or is cancelled.
+    """Scheduler: starts queued runs in parallel up to `slots`, at most `per_worker` per worker,
+    once their dependencies are applied. Routing happens here, in one thread, so capacity counts are exact.
+    Pause stops new pickups; runs in flight finish or are cancelled.
     Callers hold RunnerLock (run_forever, `ops work`), so recover() never fails another runner's run."""
     recover(ledger)
-    while True:
-        queued = [] if paused(ledger) else ledger.with_status('queued')
-        for run_id in queued[:1]:  # re-check pause between runs
-            try:
-                print(run_id, process(ledger, run_id), flush=True)
-            except Exception as e:  # e.g. the repository vanished; the loop must survive
-                ledger.transition(run_id, ['queued', *ACTIVE], 'failed', summary=f'runner error: {type(e).__name__}')
-        if not watch and not queued:
-            return
-        if not queued:
-            time.sleep(2)
+    running, assigned, profiles, seen = {}, {}, None, 0.0
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        while True:
+            for run_id in [r for r, f in running.items() if f.done()]:
+                running.pop(run_id)
+                assigned.pop(run_id, None)
+            slots = int(ledger.setting('slots') or SLOTS)
+            cap = int(ledger.setting('per_worker') or PER_WORKER)
+            started = 0
+            for run_id in ([] if paused(ledger) else ledger.with_status('queued')):
+                if len(running) >= slots:
+                    break
+                if run_id in running:
+                    continue
+                run = ledger.run(run_id)
+                state = dependency_state(ledger, run)
+                if state == 'wait':
+                    continue
+                if state != 'ready':
+                    ledger.transition(run_id, ['queued'], 'blocked', summary=state)
+                    continue
+                if profiles is None or time.monotonic() - seen > 60:  # probes spawn CLIs; cache briefly
+                    profiles, seen = available_profiles(), time.monotonic()
+                busy = {w for w in profiles if sum(1 for a in assigned.values() if a == w) >= cap}
+                decision = choose(run, profiles, busy)
+                if not decision.selected and busy:
+                    continue  # a busy worker may take it later
+                assigned[run_id] = decision.selected
+                running[run_id] = pool.submit(_run_in_thread, ledger.path, run_id, decision)
+                started += 1
+            if not watch and not running and not started:
+                return
+            time.sleep(0.5 if running else 2)
 
 
 def approve(ledger, run_id):
@@ -246,16 +352,20 @@ def approve(ledger, run_id):
     return ledger.transition(run_id, ['applying'], 'applied')
 
 
-def revise(ledger, run_id, feedback):
-    """Fix round: supersede a diff awaiting approval with a new run that continues from it."""
+def revise(ledger, run_id, feedback, fresh=False):
+    """Fix round: supersede a diff awaiting approval with a new run that continues from it.
+    fresh=True redoes the task from the current repository state instead (use when the diff no longer applies)."""
     run = ledger.run(run_id)
     if not run or not feedback.strip() or not ledger.transition(run_id, ['needs_approval'], 'revised'):
         return None
     task = run['task']
-    objective = (f"{task['objective']}\n\nOperator feedback on the previous attempt ({run_id}), whose changes are "
-                 f"already in this worktree:\n{feedback.strip()}")
+    where = ('Redo it from the current repository state; that attempt\'s diff no longer applies' if fresh
+             else 'whose changes are already in this worktree')
+    objective = (f"{task['objective']}\n\nOperator feedback on the previous attempt ({run_id}), {where}:\n"
+                 f"{feedback.strip()}")
+    options = {k: v for k, v in (run.get('options') or {}).items() if k != 'fresh'}
     new_id = submit(ledger, run['repo'], objective, task['kind'], task['completion_criteria'], run['timeout'],
-                    parent=run_id)
+                    parent=run_id, worker=run.get('worker'), options={**options, 'fresh': True} if fresh else options)
     ledger.event(run_id, 'revision_queued', next=new_id, feedback=feedback.strip())
     return new_id
 
