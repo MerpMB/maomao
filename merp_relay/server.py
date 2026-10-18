@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from . import ops
 from .ledger import Ledger
-from .quota import STATE, claude_observation, codex_observation
+from .quota import STATE, claude_observation, codex_observation, refresh
 
 STATIC = Path(__file__).parent / 'static'
 # Rejecting foreign Host headers blocks DNS-rebinding pages from reading the API.
@@ -123,6 +123,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {'error': str(e)})
         ledger = Ledger(self.db_path)
         parts = (urlsplit(self.path).path.rstrip('/') or '/').split('/')
+        if parts == ['', 'api', 'quota', 'refresh']:
+            outcome = refresh()  # one tiny call per CLI, ~10-30 s
+            if outcome is None:
+                return self._send(409, {'error': 'a refresh is already running'})
+            ledger.event(None, 'quota_refresh', **outcome)
+            return self._send(200, {'outcome': outcome, 'pools': pools()})
         if parts == ['', 'api', 'routing']:
             if not isinstance(body.get('paused'), bool):
                 return self._send(400, {'error': 'paused must be true or false'})

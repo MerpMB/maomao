@@ -165,3 +165,14 @@ def test_revise_over_api(api, repo):
     assert status == 201
     detail = json.loads(get(port, f"/api/runs/{body['id']}")[1])
     assert detail['parent'] == first and detail['status'] == 'queued'
+
+
+def test_quota_refresh_endpoint(api, monkeypatch):
+    port, _ = api
+    token = server.Handler.token
+    monkeypatch.setattr(server, 'refresh', lambda: {'claude': 'refreshed', 'codex': 'failed (exit 1)'})
+    assert post(port, '/api/quota/refresh', {})[0] == 403
+    status, body = post(port, '/api/quota/refresh', {}, token)
+    assert status == 200 and body['outcome']['codex'] == 'failed (exit 1)' and len(body['pools']) == 2
+    monkeypatch.setattr(server, 'refresh', lambda: None)
+    assert post(port, '/api/quota/refresh', {}, token)[0] == 409

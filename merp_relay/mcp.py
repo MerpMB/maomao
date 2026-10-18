@@ -67,6 +67,9 @@ def _arg(args, name, kind, required=True, default=None, limit=None):
 
 
 def t_workers(ledger, args):
+    if args.get('refresh') is True:
+        from .quota import refresh
+        ledger.event(None, 'quota_refresh', **(refresh() or {'note': 'refresh already running'}))
     profiles = ops.available_profiles()
     return {'workers': [{'id': k, 'runtime_version': p.runtime_version} for k, (_, p) in profiles.items()],
             'quota': pools(), 'preference': ops.PREFERENCE, 'runner_active': ops.runner_active(),
@@ -200,7 +203,9 @@ def t_inbox(ledger, args):
 
 S = {'type': 'string'}
 TOOLS = {
-    'workers': (t_workers, 'List available workers, live quota per pool, runner and routing state.', {}),
+    'workers': (t_workers, 'List available workers, live quota per pool, runner and routing state. '
+                'refresh=true first makes one tiny call per CLI for fresh quota (costs a little quota).',
+                {'refresh': {'type': 'boolean'}}),
     'dispatch': (t_dispatch, 'Queue a task for a worker in a disposable git worktree of `repo`. The diff is cross-vendor '
                  'reviewed automatically. Omit `worker` to route by live quota.',
                  {'objective': S, 'repo': S, 'kind': {'type': 'string', 'enum': ['IMPLEMENT', 'INVESTIGATE', 'REVIEW']},

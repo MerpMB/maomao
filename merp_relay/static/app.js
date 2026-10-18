@@ -229,6 +229,7 @@ function eventText(e) {
   if (e.type === 'apply_failed') return d.reason || '';
   if (e.type === 'submitted') return `${d.kind} in ${d.repo}`;
   if (e.type === 'setting') return `${d.key} = ${d.value}`;
+  if (e.type === 'quota_refresh') return Object.entries(d).map(([k, v]) => `${k}: ${v}`).join(' · ');
   if (e.type === 'decision') return `${d.by} ${d.action}` + (d.reason ? ` — ${d.reason}` : '');
   if (e.type === 'question') return `${d.asked_by} asks: ${d.question}`;
   if (e.type === 'answer') return `owner answered ${d.id}`;
@@ -308,6 +309,18 @@ async function loadStatus() {
   const repo = document.querySelector('#submit-form [name=repo]');
   if (!repo.value && status.recent_repos.length) repo.value = status.recent_repos[0];
 }
+
+document.getElementById('refresh').addEventListener('click', async (ev) => {
+  const button = ev.target;
+  button.disabled = true;
+  button.textContent = 'Refreshing…';
+  try {
+    const res = await post('/api/quota/refresh');
+    const failed = Object.entries(res.outcome).filter(([, v]) => v !== 'refreshed');
+    button.title = failed.length ? failed.map(([k, v]) => `${k}: ${v}`).join('; ') : 'Refreshed just now';
+  } catch (err) { button.title = `Refresh failed: ${err.message}`; }
+  finally { button.disabled = false; button.textContent = 'Refresh quota'; loadPools(); }
+});
 
 document.getElementById('pause').addEventListener('click', async (ev) => {
   ev.target.disabled = true;
