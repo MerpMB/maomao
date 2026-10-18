@@ -170,6 +170,17 @@ config/secrets/CI files, more than N files). The owner commits.
     The `opus` alias is Opus 5 on Claude Code 2.1.240; Opus 5.5 needs `claude update` (≥ 2.1.280).
   - Known gap → P2: tasks that touch the same files and are approved in a different order conflict (task 1 and 2 both
     create `test_textutils.py`). Needs `depends_on` plus re-basing a pending run on the new HEAD.
+- **P2 ✅ DONE 2026-10-18.** The scheduler (`ops.work`) starts queued runs in parallel up to `slots` (3) and at most
+  `per_worker` (2) per worker. Both can be overridden as ledger settings. Routing happens in the scheduler thread, so capacity is exact. Tiers: `model`
+  and `effort` per run, validated (`ultra` excluded) and passed as Codex `-m`/`model_reasoning_effort` and Claude
+  `--model`/`--effort`. `workers()` lists Codex models from `~/.codex/models_cache.json`. `depends_on` waits until the
+  dependencies are **applied**; a failed or rejected dependency blocks with a reason, and a revised one is followed to its
+  latest attempt. **Staged-aware base:** every worktree starts from HEAD plus the repo's staged changes, so dependent work
+  builds on approved changes, and the diff is only the run's own work. `revise(fresh=true)` redoes a task when its diff
+  no longer applies. Verified for real with the Opus 5.5 lead: it approved the owner-answered task 1, saw the diff
+  conflict and redid it fresh, then ran tasks 1 and 3 in parallel and made task 4 depend on task 1 (same files), all at `effort=low`.
+  All were applied and the demo tests pass. Finding: Claude workers can't run tests (file tools only, no OS sandbox on
+  Windows), so the reviewer asked for changes and the lead re-pinned those tasks to Codex. This is now in the lead guidance.
 - **P2 — Parallel + tiers:** N slots per pool (worktrees already isolate), worker tiers by model and effort (Codex `-m`,
   `model_reasoning_effort`; Claude `--model`), `depends_on` task tree.
 - **P3 — Trace view:** dashboard view from journal/brief → subtasks → runs → reviews → decisions, plus inbox answers.

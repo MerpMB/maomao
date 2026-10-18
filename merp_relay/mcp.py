@@ -72,8 +72,10 @@ def t_workers(ledger, args):
         ledger.event(None, 'quota_refresh', **(refresh() or {'note': 'refresh already running'}))
     profiles = ops.available_profiles()
     return {'workers': [{'id': k, 'runtime_version': p.runtime_version} for k, (_, p) in profiles.items()],
-            'quota': pools(), 'preference': ops.PREFERENCE, 'runner_active': ops.runner_active(),
-            'routing_paused': ops.paused(ledger)}
+            'models': ops.models(), 'quota': pools(), 'preference': ops.PREFERENCE,
+            'slots': int(ledger.setting('slots') or ops.SLOTS),
+            'per_worker': int(ledger.setting('per_worker') or ops.PER_WORKER),
+            'runner_active': ops.runner_active(), 'routing_paused': ops.paused(ledger)}
 
 
 def t_dispatch(ledger, args):
@@ -89,9 +91,14 @@ def t_dispatch(ledger, args):
     kind = args.get('kind', 'IMPLEMENT')
     if kind not in ('IMPLEMENT', 'INVESTIGATE', 'REVIEW'):
         raise ValueError('unknown kind')
+    depends_on = args.get('depends_on') or []
+    if not isinstance(depends_on, list) or not all(isinstance(d, str) for d in depends_on):
+        raise ValueError('depends_on must be a list of run ids')
     run_id = ops.submit(ledger, repo, _arg(args, 'objective', str, limit=4000).strip(), kind,
-                        args.get('criteria') or (), timeout, worker=worker)
-    return {'run_id': run_id, 'status': 'queued'}
+                        args.get('criteria') or (), timeout, worker=worker,
+                        options={'model': args.get('model'), 'effort': args.get('effort')}, depends_on=depends_on)
+    return {'run_id': run_id, 'status': 'queued',
+            'note': 'starts after dependencies are applied' if depends_on else None}
 
 
 def t_runs(ledger, args):
@@ -106,7 +113,9 @@ def t_report(ledger, args):
         raise ValueError('unknown run')
     diff = run['diff'] or ''
     result = (run['artifact'] or {}).get('result') or {}
+    waiting = ops.dependency_state(ledger, run) if run['status'] == 'queued' and run.get('depends_on') else None
     return {**run_summary(run), 'parent': run.get('parent'), 'requested_worker': run.get('worker'),
+            'options': run.get('options'), 'depends_on': run.get('depends_on'), 'dependency_state': waiting,
             'route': (run['routing'] or {}).get('rationale'),
             'worker_result': {k: result.get(k) for k in ('status', 'summary', 'unresolved')} | {
                 'findings': [f['text'] for f in result.get('findings', [])],
@@ -151,7 +160,8 @@ def t_reject(ledger, args):
 
 
 def t_revise(ledger, args):
-    new_id = ops.revise(ledger, _arg(args, 'run_id', str), _arg(args, 'feedback', str, limit=2000))
+    new_id = ops.revise(ledger, _arg(args, 'run_id', str), _arg(args, 'feedback', str, limit=2000),
+                        fresh=args.get('fresh') is True)
     if not new_id:
         raise ValueError('only a run awaiting approval can be revised')
     return {'run_id': new_id, 'status': 'queued'}
@@ -206,10 +216,14 @@ TOOLS = {
     'workers': (t_workers, 'List available workers, live quota per pool, runner and routing state. '
                 'refresh=true first makes one tiny call per CLI for fresh quota (costs a little quota).',
                 {'refresh': {'type': 'boolean'}}),
-    'dispatch': (t_dispatch, 'Queue a task for a worker in a disposable git worktree of `repo`. The diff is cross-vendor '
-                 'reviewed automatically. Omit `worker` to route by live quota.',
+    'dispatch': (t_dispatch, 'Queue a task for a worker in a disposable git worktree of `repo` (starts from HEAD plus '
+                 'staged changes). The diff is cross-vendor reviewed automatically. Omit `worker` to route by live '
+                 'quota. `model`/`effort` pick the tier (see workers().models); `depends_on` waits until those runs '
+                 'are applied. Independent runs execute in parallel.',
                  {'objective': S, 'repo': S, 'kind': {'type': 'string', 'enum': ['IMPLEMENT', 'INVESTIGATE', 'REVIEW']},
-                  'worker': {'type': 'string', 'enum': ['codex', 'claude']}, 'timeout': {'type': 'integer'},
+                  'worker': {'type': 'string', 'enum': ['codex', 'claude']}, 'model': S,
+                  'effort': {'type': 'string', 'enum': list(ops.EFFORTS)}, 'timeout': {'type': 'integer'},
+                  'depends_on': {'type': 'array', 'items': S},
                   'criteria': {'type': 'array', 'items': S}}, ['objective', 'repo']),
     'runs': (t_runs, 'Recent runs (optionally filter by status).', {'status': S, 'limit': {'type': 'integer'}}),
     'report': (t_report, 'Full report for one run: worker result, cross-vendor review, approval blockers, diff.',
@@ -220,8 +234,9 @@ TOOLS = {
                 'review is APPROVE and no risky change is involved; then ask the owner.',
                 {'run_id': S, 'reason': S}, ['run_id', 'reason']),
     'reject': (t_reject, 'Reject a diff awaiting approval.', {'run_id': S, 'reason': S}, ['run_id', 'reason']),
-    'revise': (t_revise, 'Send a diff back with feedback; a new run continues from it.',
-               {'run_id': S, 'feedback': S}, ['run_id', 'feedback']),
+    'revise': (t_revise, 'Send a diff back with feedback; a new run continues from it. fresh=true redoes the task '
+               'from the current repo state instead (use when approve reports the diff no longer applies).',
+               {'run_id': S, 'feedback': S, 'fresh': {'type': 'boolean'}}, ['run_id', 'feedback']),
     'cancel': (t_cancel, 'Cancel a queued run or stop a running one.', {'run_id': S}, ['run_id']),
     'ask_owner': (t_ask_owner, 'Ask the owner a question; it appears in the dashboard inbox. Non-blocking.',
                   {'question': S, 'project': S, 'run_id': S}, ['question']),

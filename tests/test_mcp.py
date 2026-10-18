@@ -169,3 +169,18 @@ def test_checkpoint_commits_relayhq(env, tmp_path, monkeypatch):
     assert call(ledger, 'checkpoint', message='demo: again')[0] == {'committed': False, 'note': 'nothing to commit'}
     monkeypatch.setenv('MERP_HQ', str(tmp_path))
     assert call(ledger, 'checkpoint', message='x')[1]  # not a RelayHQ
+
+
+def test_dispatch_with_tier_and_dependency(env):
+    ledger, repo = env
+    first = call(ledger, 'dispatch', objective='a', repo=str(repo))[0]['run_id']
+    queued, is_error = call(ledger, 'dispatch', objective='b', repo=str(repo), worker='codex',
+                            model='gpt-6-luna', effort='low', depends_on=[first])
+    assert not is_error and queued['note'].startswith('starts after')
+    report = call(ledger, 'report', run_id=queued['run_id'])[0]
+    assert report['options'] == {'model': 'gpt-6-luna', 'effort': 'low'} and report['depends_on'] == [first]
+    assert report['dependency_state'] == 'wait'
+    assert call(ledger, 'dispatch', objective='c', repo=str(repo), effort='ultra')[1]
+    assert call(ledger, 'dispatch', objective='c', repo=str(repo), depends_on='r-x')[1]
+    workers = call(ledger, 'workers')[0]
+    assert workers['slots'] == ops.SLOTS and 'efforts' in workers['models']

@@ -103,7 +103,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {'error': 'unknown run'})
             return self._send(200, {**run_summary(run), 'diff': run['diff'], 'routing': run['routing'],
                 'artifact': run['artifact'], 'base_commit': run['base_commit'],
-                'timeout': run['timeout'], 'parent': run.get('parent'), 'events': ledger.events(run['id'])})
+                'timeout': run['timeout'], 'parent': run.get('parent'), 'options': run.get('options'),
+                'depends_on': run.get('depends_on'), 'requested_worker': run.get('worker'),
+                'events': ledger.events(run['id'])})
         self._send(404, {'error': 'not found'})
 
     def do_POST(self):

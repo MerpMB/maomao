@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from .quota import STATE
 
-JSON_FIELDS = ('task', 'artifact', 'routing')
+JSON_FIELDS = ('task', 'artifact', 'routing', 'options', 'depends_on')
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created_at TEXT, updated_at TEXT, status TEXT,
     task TEXT, repo TEXT, timeout INTEGER, resource_id TEXT, base_commit TEXT, diff TEXT,
@@ -25,22 +25,25 @@ def _now():
 class Ledger:
     def __init__(self, path=STATE / 'relay.db'):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self.db = sqlite3.connect(path, isolation_level=None, check_same_thread=False, timeout=10)
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript(SCHEMA)
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(runs)')}
-        for name in ('parent', 'worker'):  # M5 fix-round lineage, V2 lead-chosen worker
+        for name in ('parent', 'worker', 'options', 'depends_on'):  # M5 lineage; V2 worker, tiers, ordering
             if name not in columns:
                 self.db.execute(f'ALTER TABLE runs ADD COLUMN {name} TEXT')
 
-    def submit(self, task, repo, timeout=900, parent=None, worker=None):
+    def submit(self, task, repo, timeout=900, parent=None, worker=None, options=None, depends_on=None):
         run_id = 'r-' + uuid4().hex[:8]
         now = _now()
-        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout, parent, worker) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout, parent, worker))
-        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo), parent=parent, worker=worker)
+        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout, parent, worker, '
+                        'options, depends_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout, parent, worker,
+                         json.dumps(options) if options else None, json.dumps(depends_on) if depends_on else None))
+        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo), parent=parent, worker=worker,
+                   options=options, depends_on=depends_on)
         return run_id
 
     def update(self, run_id, **fields):
