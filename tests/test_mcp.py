@@ -140,7 +140,10 @@ def test_runner_lock_is_exclusive(tmp_path):
 
 
 def test_stdio_server_speaks_json_lines(tmp_path):
-    env = {**os.environ, 'LOCALAPPDATA': str(tmp_path)}  # isolated ledger and runner lock
+    hq = tmp_path / 'hq'
+    hq.mkdir()
+    (hq / 'AGENTS.md').write_text('lead\n')
+    env = {**os.environ, 'LOCALAPPDATA': str(tmp_path), 'MERP_HQ': str(hq)}  # isolated ledger, lock and HQ
     proc = subprocess.Popen([sys.executable, '-m', 'merp_relay.mcp'], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
     try:
@@ -152,6 +155,7 @@ def test_stdio_server_speaks_json_lines(tmp_path):
         first, second = json.loads(proc.stdout.readline()), json.loads(proc.stdout.readline())
         assert first['id'] == 1 and first['result']['serverInfo']['name'] == 'merp-relay'
         assert second['id'] == 2 and len(second['result']['tools']) == len(mcp.TOOLS)
+        assert Ledger(tmp_path / 'merp-relay' / 'relay.db').setting('hq_path') == str(hq.resolve())
     finally:
         proc.kill()
         proc.wait(timeout=5)
@@ -179,6 +183,8 @@ def test_dispatch_with_tier_and_dependency(env):
     assert not is_error and queued['note'].startswith('starts after')
     report = call(ledger, 'report', run_id=queued['run_id'])[0]
     assert report['options'] == {'model': 'gpt-6-luna', 'effort': 'low'} and report['depends_on'] == [first]
+    tagged = call(ledger, 'dispatch', objective='d', repo=str(repo), project='demo')[0]['run_id']
+    assert ledger.run(tagged)['project'] == 'demo'
     assert report['dependency_state'] == 'wait'
     assert call(ledger, 'dispatch', objective='c', repo=str(repo), effort='ultra')[1]
     assert call(ledger, 'dispatch', objective='c', repo=str(repo), depends_on='r-x')[1]

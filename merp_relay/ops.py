@@ -93,7 +93,7 @@ def review_dispatch(adapter, task, packet, should_stop):
 
 
 def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, parent=None, worker=None,
-           options=None, depends_on=None):
+           options=None, depends_on=None, project=None):
     repo = Path(repo).resolve()
     git(repo, 'rev-parse', 'HEAD')  # must be a git repository with a commit
     options = validate_options(options)
@@ -103,7 +103,7 @@ def submit(ledger, repo, objective, kind='IMPLEMENT', criteria=(), timeout=900, 
     task = TaskRequest(task_id='t-' + datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'), objective=objective,
         kind=kind, execution_mode='repository_access', read_scope=('.',),
         completion_criteria=tuple(criteria) or ('Objective met with changes limited to the worktree',))
-    return ledger.submit(task, repo, timeout, parent, worker, options, list(depends_on or ()) or None)
+    return ledger.submit(task, repo, timeout, parent, worker, options, list(depends_on or ()) or None, project)
 
 
 def review(ledger, run_id, objective, artifact, diff, profiles, author):
@@ -365,7 +365,8 @@ def revise(ledger, run_id, feedback, fresh=False):
                  f"{feedback.strip()}")
     options = {k: v for k, v in (run.get('options') or {}).items() if k != 'fresh'}
     new_id = submit(ledger, run['repo'], objective, task['kind'], task['completion_criteria'], run['timeout'],
-                    parent=run_id, worker=run.get('worker'), options={**options, 'fresh': True} if fresh else options)
+                    parent=run_id, worker=run.get('worker'), options={**options, 'fresh': True} if fresh else options,
+                    project=run.get('project'))
     ledger.event(run_id, 'revision_queued', next=new_id, feedback=feedback.strip())
     return new_id
 

@@ -176,3 +176,17 @@ def test_quota_refresh_endpoint(api, monkeypatch):
     assert status == 200 and body['outcome']['codex'] == 'failed (exit 1)' and len(body['pools']) == 2
     monkeypatch.setattr(server, 'refresh', lambda: None)
     assert post(port, '/api/quota/refresh', {}, token)[0] == 409
+
+
+def test_project_trace_endpoints(api, tmp_path):
+    port, _ = api
+    ledger = Ledger(server.Handler.db_path)
+    assert json.loads(get(port, '/api/projects')[1]) == {'hq': None, 'projects': []}
+    assert get(port, '/api/projects/demo')[0] == 404
+    hq = tmp_path / 'hq'
+    (hq / 'projects' / 'demo').mkdir(parents=True)
+    (hq / 'projects' / 'demo' / 'state.md').write_text('all good\n', encoding='utf-8')
+    ledger.set_setting('hq_path', str(hq))
+    assert json.loads(get(port, '/api/projects')[1])['projects'] == ['demo']
+    status, body, _ = get(port, '/api/projects/demo')
+    assert status == 200 and json.loads(body)['state'] == 'all good\n'
