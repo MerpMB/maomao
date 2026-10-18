@@ -68,6 +68,11 @@ must apply the same contained policy that `execute_snapshot(weaker_experiment=Tr
 Verified for real on a scratch repo: Codex diff → approve → staged change. A mid-run cancel stopped Codex about 0.6 s after the request.
 Reject, conflicts, crashes and orphan recovery are covered by tests. Lessons: Windows Codex needs `windows.sandbox="elevated"`
 when user config is ignored, and patches must go through git as bytes (CRLF).
+Claude repo-mode verified for real on 2026-10-18 (CLI 2.1.240, Codex made unavailable for the run): diff → approve →
+staged change; `worker_finished` recorded `2.1.240 (Claude Code)`. Two fixes came out of this. First, 2.1.240 writes a
+`system` line after the `result` envelope, so the parser now takes the last `result` line instead of the last line
+(before this, every Claude run failed as malformed). Second, `cwd` is resolved because Claude's file tools deny 8.3
+short paths (`GAMING~1`).
 
 ```
 python -m merp_relay.ops submit "objective" --repo PATH [--timeout 900]

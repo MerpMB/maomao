@@ -70,6 +70,15 @@ def test_claude_stream_json_extracts_rate_limits():
     assert result.status == 'completed' and metrics['rate_limits'] == [info]
 
 
+def test_claude_result_envelope_need_not_be_last_line():
+    # Observed with 2.1.240: a system task_summary line follows the result envelope.
+    result_line = {'type': 'result', 'subtype': 'success', 'is_error': False,
+        'structured_output': {'summary': 'ok', 'findings': [], 'source_refs': [], 'unresolved': []}}
+    stream = '\n'.join(map(json.dumps, [result_line, {'type': 'system', 'subtype': 'task_summary', 'detail': None}]))
+    result, _ = normalize_claude(stream, 0, 'e', 't')
+    assert result.status == 'completed' and result.summary == 'ok'
+
+
 def test_claude_typed_rejection_reports_exhausted():
     stream = '\n'.join(map(json.dumps, [{'type': 'rate_limit_event', 'rate_limit_info': {'status': 'rejected'}},
                                         {'type': 'result', 'subtype': 'error', 'is_error': True}]))
