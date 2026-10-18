@@ -5,7 +5,7 @@ const STATUS = {
   queued: ['Queued', '--muted'], running: ['Running', '--accent'], cancel_requested: ['Cancelling', '--warning'],
   needs_approval: ['Needs approval', '--warning'], applying: ['Applying', '--accent'], applied: ['Applied', '--good'],
   completed: ['Completed', '--good'], rejected: ['Rejected', '--muted'], failed: ['Failed', '--critical'],
-  cancelled: ['Cancelled', '--muted'], blocked: ['Blocked', '--serious'],
+  cancelled: ['Cancelled', '--muted'], blocked: ['Blocked', '--serious'], revised: ['Superseded', '--muted'],
   available: ['Available', '--good'], exhausted: ['Exhausted', '--critical'], unknown: ['Unknown', '--muted'],
 };
 const WINDOW_NAMES = { five_hour: '5-hour', '300m': '5-hour', seven_day: '7-day', '10080m': '7-day' };
@@ -119,6 +119,7 @@ async function loadDetail() {
       el('dt', {}, 'Objective'), el('dd', {}, r.objective),
       el('dt', {}, 'Repository'), el('dd', { class: 'mono' }, r.repo),
       el('dt', {}, 'Worker'), el('dd', {}, r.resource_id || '—'),
+      lineage(r),
       el('dt', {}, 'Route'), el('dd', {}, r.routing ? r.routing.rationale : 'not routed yet'),
       excluded.length ? [el('dt', {}, 'Excluded'), el('dd', {}, excluded.map(([k, v]) => `${k}: ${v.join('; ')}`).join(' · '))] : null,
       el('dt', {}, 'Base'), el('dd', { class: 'mono' }, r.base_commit ? r.base_commit.slice(0, 12) : '—'),
@@ -129,12 +130,63 @@ async function loadDetail() {
         result.findings.map((f) => el('li', {}, f.text, el('span', { class: 'prov' }, f.provenance.replace('_', ' ')))))] : null,
       result.unresolved.length ? [el('h4', {}, 'Unresolved'), el('ul', { class: 'findings' }, result.unresolved.map((u) => el('li', {}, u)))] : null,
     ] : null,
+    reviewSection(r.events),
     el('h4', {}, r.diff_stats ? `Diff +${r.diff_stats.added} −${r.diff_stats.removed}` : 'Diff'),
     r.diff ? diffView(r.diff) : el('div', { class: 'meta' }, 'No changes proposed.'),
     el('h4', {}, 'Timeline'),
     el('ol', { class: 'events' }, r.events.map((e) => el('li', {},
       el('span', { class: 'mono', title: e.at }, new Date(e.at).toLocaleTimeString()), el('span', {}, e.type),
       el('span', { class: 'meta' }, eventText(e)))))].flat(Infinity).filter((n) => n != null));
+}
+
+function runLink(id) {
+  const a = el('a', { href: '#', class: 'mono' }, id);
+  a.addEventListener('click', (ev) => { ev.preventDefault(); selected = id; loadRuns(); loadDetail(); });
+  return a;
+}
+
+function lineage(r) {
+  const next = r.events.filter((e) => e.type === 'revision_queued').map((e) => e.data.next)[0];
+  return [r.parent ? [el('dt', {}, 'Revision of'), el('dd', {}, runLink(r.parent))] : null,
+          next ? [el('dt', {}, 'Superseded by'), el('dd', {}, runLink(next))] : null];
+}
+
+function reviewSection(events) {
+  const last = events.filter((e) => ['review_started', 'reviewed', 'review_skipped'].includes(e.type)).pop();
+  if (!last) return null;
+  const head = el('h4', {}, 'Cross-vendor review');
+  if (last.type === 'review_skipped') return [head, el('div', { class: 'meta' }, `Skipped: ${last.data.reason}`)];
+  if (last.type === 'review_started') return [head, el('div', { class: 'meta' }, `Reviewing with ${last.data.reviewer}…`)];
+  const res = last.data.result;
+  const summary = res.summary || '';
+  const verdict = res.status !== 'completed' ? [`Review ${res.status}`, '--muted']
+    : summary.startsWith('APPROVE:') ? ['Reviewer approves', '--good']
+    : summary.startsWith('CHANGES:') ? ['Reviewer requests changes', '--warning'] : ['No verdict', '--muted'];
+  return [head,
+    el('div', { class: 'actions' }, el('span', { class: 'badge', style: `--sc: var(${verdict[1]})` }, verdict[0]),
+      el('span', { class: 'meta' }, `by ${last.data.reviewer} · worker reported`)),
+    el('div', {}, summary.replace(/^(APPROVE|CHANGES):\s*/, '')),
+    res.findings && res.findings.length ? el('ul', { class: 'findings' }, res.findings.map((f) => el('li', {}, f.text))) : null,
+    res.unresolved && res.unresolved.length ? [el('div', { class: 'meta' }, 'Unresolved:'),
+      el('ul', { class: 'findings' }, res.unresolved.map((u) => el('li', {}, u)))] : null];
+}
+
+function reviseForm(r) {
+  const area = el('textarea', { maxlength: '2000', 'aria-label': 'Feedback for the next attempt',
+    placeholder: 'What should change? The next run starts from this diff.' });
+  const send = el('button', { type: 'button', class: 'primary' }, 'Send back');
+  const form = el('div', { class: 'submit', hidden: '' }, area, el('div', { class: 'actions' }, send));
+  send.addEventListener('click', async () => {
+    const notice = document.getElementById('action-notice');
+    notice.hidden = true;
+    send.disabled = true;
+    try {
+      const res = await post(`/api/runs/${encodeURIComponent(r.id)}/revise`, { feedback: area.value });
+      selected = res.id;
+    } catch (err) { notice.textContent = `Revise failed: ${err.message}`; notice.hidden = false; }
+    finally { send.disabled = false; loadRuns(); loadDetail(); }
+  });
+  return form;
 }
 
 function actions(r) {
@@ -156,6 +208,15 @@ function actions(r) {
     act('Approve & apply', 'approve', 'primary',
       `Apply this diff to ${r.repo}?\nIt is staged, not committed. Files changed since the run are refused.`);
     act('Reject', 'reject', 'danger', 'Reject this diff? It stays in the ledger for audit.');
+    const form = reviseForm(r);
+    const toggle = el('button', { type: 'button', 'aria-expanded': 'false' }, 'Revise…');
+    toggle.addEventListener('click', () => {
+      form.hidden = !form.hidden;
+      toggle.setAttribute('aria-expanded', String(!form.hidden));
+      if (!form.hidden) form.querySelector('textarea').focus();
+    });
+    buttons.splice(1, 0, toggle);
+    return [el('div', { class: 'actions' }, buttons), form];
   }
   if (['queued', 'running'].includes(r.status)) act(r.status === 'queued' ? 'Cancel' : 'Stop run', 'cancel', 'danger');
   return buttons.length ? el('div', { class: 'actions' }, buttons) : null;
@@ -168,6 +229,14 @@ function eventText(e) {
   if (e.type === 'apply_failed') return d.reason || '';
   if (e.type === 'submitted') return `${d.kind} in ${d.repo}`;
   if (e.type === 'setting') return `${d.key} = ${d.value}`;
+  if (e.type === 'quota_refresh') return Object.entries(d).map(([k, v]) => `${k}: ${v}`).join(' · ');
+  if (e.type === 'decision') return `${d.by} ${d.action}` + (d.reason ? ` — ${d.reason}` : '');
+  if (e.type === 'question') return `${d.asked_by} asks: ${d.question}`;
+  if (e.type === 'answer') return `owner answered ${d.id}`;
+  if (e.type === 'review_started') return `reviewer ${d.reviewer}`;
+  if (e.type === 'reviewed') return `${d.reviewer}: ${(d.result && d.result.summary || '').slice(0, 80)}`;
+  if (e.type === 'review_skipped') return d.reason;
+  if (e.type === 'revision_queued') return `next attempt ${d.next}`;
   return '';
 }
 
@@ -190,6 +259,7 @@ function connect() {
     if (e.run_id === selected) loadDetail();
     if (e.type === 'worker_finished') loadPools();  // a finished run may carry fresh quota
     if (e.type === 'setting' || e.type === 'submitted') loadStatus();
+    if (e.type === 'question' || e.type === 'answer') loadInbox();
   };
 }
 
@@ -201,6 +271,28 @@ function theme() {
     root.dataset.theme = dark ? 'light' : 'dark';
     try { localStorage.setItem('relay-theme', root.dataset.theme); } catch (_) {}
   });
+}
+
+async function loadInbox() {
+  let questions;
+  try { questions = await getJSON('/api/inbox'); } catch (_) { return; }
+  const open = questions.filter((q) => q.status === 'open');
+  document.getElementById('inbox').hidden = open.length === 0;
+  document.getElementById('questions').replaceChildren(...open.map((q) => {
+    const area = el('textarea', { maxlength: '4000', 'aria-label': `Answer to ${q.id}` });
+    const send = el('button', { type: 'button', class: 'primary' }, 'Answer');
+    const notice = el('div', { class: 'notice error', role: 'alert', hidden: '' });
+    send.addEventListener('click', async () => {
+      send.disabled = true;
+      try { await post(`/api/inbox/${encodeURIComponent(q.id)}/answer`, { answer: area.value }); loadInbox(); }
+      catch (err) { notice.textContent = err.message; notice.hidden = false; }
+      finally { send.disabled = false; }
+    });
+    return el('div', { class: 'question' },
+      el('div', { class: 'meta' }, `${q.asked_by} · ${ago(q.created_at)} ago`, q.project ? ` · ${q.project}` : '',
+        q.run_id ? [' · ', runLink(q.run_id)] : null),
+      el('div', {}, q.question), area, el('div', { class: 'actions' }, send), notice);
+  }));
 }
 
 let status = null;
@@ -217,6 +309,18 @@ async function loadStatus() {
   const repo = document.querySelector('#submit-form [name=repo]');
   if (!repo.value && status.recent_repos.length) repo.value = status.recent_repos[0];
 }
+
+document.getElementById('refresh').addEventListener('click', async (ev) => {
+  const button = ev.target;
+  button.disabled = true;
+  button.textContent = 'Refreshing…';
+  try {
+    const res = await post('/api/quota/refresh');
+    const failed = Object.entries(res.outcome).filter(([, v]) => v !== 'refreshed');
+    button.title = failed.length ? failed.map(([k, v]) => `${k}: ${v}`).join('; ') : 'Refreshed just now';
+  } catch (err) { button.title = `Refresh failed: ${err.message}`; }
+  finally { button.disabled = false; button.textContent = 'Refresh quota'; loadPools(); }
+});
 
 document.getElementById('pause').addEventListener('click', async (ev) => {
   ev.target.disabled = true;
@@ -247,6 +351,7 @@ document.getElementById('submit-form').addEventListener('submit', async (ev) => 
 
 theme();
 loadStatus(); setInterval(loadStatus, 10000);
+loadInbox(); setInterval(loadInbox, 15000);
 const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
 tick(); setInterval(tick, 1000);
 loadPools(); setInterval(loadPools, 30000);

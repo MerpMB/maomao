@@ -68,6 +68,11 @@ must apply the same contained policy that `execute_snapshot(weaker_experiment=Tr
 Verified for real on a scratch repo: Codex diff → approve → staged change. A mid-run cancel stopped Codex about 0.6 s after the request.
 Reject, conflicts, crashes and orphan recovery are covered by tests. Lessons: Windows Codex needs `windows.sandbox="elevated"`
 when user config is ignored, and patches must go through git as bytes (CRLF).
+Claude repo-mode verified for real on 2026-10-18 (CLI 2.1.240, Codex made unavailable for the run): diff → approve →
+staged change; `worker_finished` recorded `2.1.240 (Claude Code)`. Two fixes came out of this. First, 2.1.240 writes a
+`system` line after the `result` envelope, so the parser now takes the last `result` line instead of the last line
+(before this, every Claude run failed as malformed). Second, `cwd` is resolved because Claude's file tools deny 8.3
+short paths (`GAMING~1`).
 
 ```
 python -m merp_relay.ops submit "objective" --repo PATH [--timeout 900]
@@ -92,8 +97,86 @@ git repo with a commit, timeout 30–3600 s). Verified for real: browser submit 
 **Cut on purpose (ultra):** reserve toggles and per-pool `limit_action`. No reserves are configured, and `route()`
 already skips exhausted pools, which in effect is `rotate`. Add these when a second account or a reserve policy actually exists.
 
-**Later (only when a need shows up):** parallel runs, auto-rotation across several accounts, notifications,
+**M5 — Cross-vendor review + revise. ✅ DONE 2026-10-18.** Every diff gets a tool-free snapshot review by the
+*other* vendor before it reaches `needs_approval` (objective + diff + the author's artifact). The verdict is a summary that starts
+with `APPROVE:` or `CHANGES:` and is shown as a badge next to Approve. A review is skipped with a reason, and never blocks approval, when
+there is no other vendor or the diff exceeds the 16 KiB packet (`# shortcut:`). **Revise** sends a diff back with feedback:
+the run becomes `revised` (Superseded), and a child run (`parent`) starts from the previous diff, so the operator approves one
+cumulative diff. CLI: `ops revise ID "feedback"`. Verified for real: Codex implemented, Claude reviewed with `CHANGES:`
+and caught a mismatch between the objective and the repo, a revision added tests, the re-review said `APPROVE:`, and approve
+applied it with the worker's tests passing. Lessons: the review prompt must say the diff is cumulative against the base. One review
+returned placeholder output ("test"); it shows as "No verdict" rather than a false approve, and a rerun was fine.
+Fixed from live data: a Claude window whose reset time has passed now reads unknown instead of its stale pre-reset %.
+
+**Later (only when a need shows up; see V2 below):** parallel runs, auto-rotation across several accounts, notifications,
 fix-round session resume, more runtimes (Gemini/OpenCode).
+
+## V2 — Lead agent + RelayHQ (decided 2026-10-18)
+
+Owner need: one **lead** model takes instructions, briefs with the owner, splits the work, picks workers (intelligence,
+effort, parallelism), reads their reports, and decides whether to ask the owner or keep going. It also keeps context and history
+outside any git repo, and can later add more runtimes (Cursor, local models, Grok).
+
+**Decision: Relay stays the hands, a CLI agent is the head.** Don't build an orchestrator loop. Relay ships an **MCP server**,
+and any MCP-capable agent CLI becomes the lead. Both subscription CLIs are MCP clients, so the lead can be swapped:
+
+| Lead | How | Verdict |
+|---|---|---|
+| **GPT-6.1 Sol via Codex CLI** | `codex -m gpt-6.1-sol` with `[mcp_servers.relay]` in config.toml (stdio) | ✅ Verified 2026-10-18 on the ChatGPT Plus login. Uses the ChatGPT quota |
+| **Opus 5.5 via Claude Code** | `.mcp.json` in RelayHQ (stdio) | ✅ Same server. Uses the Claude Pro quota. Use it when ChatGPT quota is low |
+| ChatGPT app (Developer Mode) | Remote MCP only, so the local control plane would need a public HTTPS tunnel. Plan support for write tools is unclear | ❌ Not now: it would expose a tool that runs agents on your repos to the internet |
+| API lead (Responses API, Sol $2/$10 per M tokens, 1.05M context) | Our own loop, pay per token, "unlimited" | ⏸ Later, if subscription quota for the lead becomes the limit. Estimated ~$1–5/day for a lead with cached context |
+
+Switching lead = opening the other CLI in RelayHQ. Both read the same files, so state survives a switch.
+
+**RelayHQ** (`D:\Work\RelayHQ`, its own git repo, so every context change can be traced):
+```
+AGENTS.md / CLAUDE.md        lead role, policy, how to use the relay tools (same content for both CLIs)
+policy.md                    when to ask the owner, approval rules, budget rules
+projects/<name>/brief.md     goal, scope, constraints, repo paths
+projects/<name>/decisions.md decision log (why)
+projects/<name>/state.md     current summary the lead keeps updated (not transcripts)
+journal/YYYY-MM-DD.md        the lead's daily log: what it dispatched, got back, decided
+```
+Machine history stays in `relay.db` (runs, events, reviews). Journal entries cite run IDs, so you can trace from a decision
+to a run, its diff and its review.
+
+**Relay MCP tools:** `workers()` (runtimes, tiers, live quota) · `dispatch(objective, repo, kind, worker?, tier?,
+depends_on?)` · `runs(status?)` / `report(run_id)` (artifact + review, never transcripts) · `wait(run_ids, timeout)` ·
+`approve(run_id, reason)` / `reject` / `revise(run_id, feedback)` · `ask_owner(question)` → dashboard inbox.
+Context lives as plain files the lead edits itself.
+
+**Approval policy (owner, 2026-10-18):** the lead approves on its own and asks the owner only when it judges it necessary.
+Guardrails in code, not just in the prompt: `approve` needs a reason, is logged as `approved_by: lead`, applies staged and
+never commits or pushes. `policy.md` lists when the lead must ask (e.g. reviewer said `CHANGES:`, no review, deletions,
+config/secrets/CI files, more than N files). The owner commits.
+
+**Phases**
+- **P1 — Lead MVP:** RelayHQ skeleton, `merp_relay.mcp` (stdio, stdlib JSON-RPC), lead instructions, owner inbox
+  (ledger table, dashboard panel). Done when Sol (Codex) and Opus (Claude Code) can each brief → dispatch → wait →
+  approve or ask, on a scratch project, with a journal entry and traceable run IDs.
+- **P1 ✅ DONE 2026-10-18.** `python -m merp_relay.mcp` (stdio JSON-RPC, stdlib) with 12 tools: `workers dispatch runs
+  report wait approve reject revise cancel ask_owner inbox checkpoint`. `approve` enforces the policy in code (review must be
+  `APPROVE`; no deletions, sensitive paths or more than 20 files) and logs `decision by=lead` with its reason. RelayHQ at `D:\Work\RelayHQ`
+  holds AGENTS.md/CLAUDE.md, policy, templates, journal and launchers. The dashboard has an inbox. A cross-process `RunnerLock`
+  means the dashboard and MCP servers never run two runners. Verified for real on a demo repo:
+  - **Sol (Codex, gpt-6.1-sol):** dispatch → wait → report. The review said APPROVE, but the lead saw an ambiguity (Unicode
+    in slugify) and **asked the owner** (`q-ae82b90a`) instead of approving, then journaled and checkpointed.
+  - **Opus (Claude Code):** read the pending state, wrote task 2 so it could not conflict with unapplied task 1,
+    verified the diff, **approved with a reason** (staged), then journaled and checkpointed. The demo tests pass.
+  - Lessons: Codex refuses MCP calls unattended unless `mcp_servers.relay.default_tools_approval_mode="approve"` is set
+    (Relay's tools enforce their own policy). Codex's sandbox protects `.git`, hence the `checkpoint` tool. The lead's
+    context cost is real: one loop took about 425k input tokens on Sol (95% cached) and about 450k cached on Opus (≈$0.94 equivalent).
+    The `opus` alias is Opus 5 on Claude Code 2.1.240; Opus 5.5 needs `claude update` (≥ 2.1.280).
+  - Known gap → P2: tasks that touch the same files and are approved in a different order conflict (task 1 and 2 both
+    create `test_textutils.py`). Needs `depends_on` plus re-basing a pending run on the new HEAD.
+- **P2 — Parallel + tiers:** N slots per pool (worktrees already isolate), worker tiers by model and effort (Codex `-m`,
+  `model_reasoning_effort`; Claude `--model`), `depends_on` task tree.
+- **P3 — Trace view:** dashboard view from journal/brief → subtasks → runs → reviews → decisions, plus inbox answers.
+- **P4 — More runtimes:** Cursor CLI, local models through a headless harness, Grok (API key, explicit opt-in).
+
+Main risk: lead token use. The lead stays thin: it plans, decides and reads summaries, and workers do the heavy work. Two
+subscription leads double the available headroom.
 
 ## Control Dashboard (ops center)
 

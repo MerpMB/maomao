@@ -3,6 +3,9 @@
 > **Current plan: [docs/ROADMAP.md](docs/ROADMAP.md).** M1–M2 are done: live 5h/7d quota (`python -m merp_relay.quota`),
 > a real Codex→Claude handoff, and worktree runs with operator approval (`python -m merp_relay.ops`).
 > Ops dashboard with runner and controls: `python -m merp_relay.server` → http://127.0.0.1:8765/.
+> Every diff is reviewed by the other vendor before approval; Revise sends it back with feedback (M5).
+> V2 lead: `python -m merp_relay.mcp` exposes Relay to a lead agent (GPT-6.1 Sol via Codex or Opus via Claude Code);
+> its shared context lives in `D:\Work\RelayHQ` (see ROADMAP V2).
 > The M0/M0.1 notes below are historical.
 
 ## M0 / M0.1 (historical)

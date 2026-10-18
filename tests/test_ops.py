@@ -138,3 +138,86 @@ def test_repo_normalization_uses_last_agent_message():
     text = '\n'.join(map(json.dumps, events))
     assert normalize(text, 0, 'e', 't', single_message=False)[0].status == 'completed'
     assert normalize(text, 0, 'e', 't')[0].status == 'failed'  # snapshot mode stays strict
+
+
+def two_vendors(monkeypatch):
+    from merp_relay.adapters import ClaudeAdapter
+    modes = {'execution_modes': frozenset({'snapshot_analysis', 'repository_access'})}
+    codex = runtime_profile(CodexAdapter(), {'version': 'codex-cli test'}).model_copy(update=modes)
+    claude = runtime_profile(ClaudeAdapter(), {'version': 'x (Claude Code)'}).model_copy(update=modes)
+    monkeypatch.setattr(ops, 'available_profiles', lambda: {'codex': ('codex-adapter', codex),
+                                                            'claude': ('claude-adapter', claude)})
+
+
+def fake_review(summary='APPROVE: looks right', seen=None):
+    def reviewer(adapter, task, packet, should_stop):
+        if seen is not None:
+            seen.update(adapter=adapter, sources=[s.source_id for s in packet.sources], refs=task.input_refs)
+        return AgentResult(execution_id='r', task_id=task.task_id, status='completed', summary=summary), {}
+    return reviewer
+
+
+def test_diff_is_reviewed_by_the_other_vendor(env, monkeypatch):
+    ledger, repo = env
+    two_vendors(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(ops, 'dispatch', edit_worker())
+    monkeypatch.setattr(ops, 'review_dispatch', fake_review(seen=seen))
+    run_id = ops.submit(ledger, repo, 'bump version')
+    assert ops.process(ledger, run_id) == 'needs_approval'
+    assert ledger.run(run_id)['resource_id'] == 'codex' and seen['adapter'] == 'claude-adapter'
+    assert seen['sources'] == ['objective.txt', 'proposed.diff'] and seen['refs'][0].startswith('sha256:')
+    reviewed = [e for e in ledger.events(run_id) if e['type'] == 'reviewed'][0]['data']
+    assert reviewed['reviewer'] == 'claude' and reviewed['result']['summary'].startswith('APPROVE:')
+
+
+def test_review_skipped_never_blocks_approval(env, monkeypatch):
+    ledger, repo = env
+    two_vendors(monkeypatch)
+    monkeypatch.setattr(ops, 'dispatch', edit_worker('x' * 20000 + '\n'))
+    monkeypatch.setattr(ops, 'review_dispatch', lambda *a: pytest.fail('oversized diff must not be reviewed'))
+    big = ops.submit(ledger, repo, 'huge change')
+    assert ops.process(ledger, big) == 'needs_approval'
+    assert any(e['type'] == 'review_skipped' and '16 KiB' in e['data']['reason'] for e in ledger.events(big))
+    def broken(*args):
+        raise OSError('synthetic')
+    monkeypatch.setattr(ops, 'dispatch', edit_worker())
+    monkeypatch.setattr(ops, 'review_dispatch', broken)
+    crash = ops.submit(ledger, repo, 'reviewer crashes')
+    assert ops.process(ledger, crash) == 'needs_approval' and '+v2' in ledger.run(crash)['diff']
+
+
+def test_cancel_during_review_cancels_run(env, monkeypatch):
+    ledger, repo = env
+    two_vendors(monkeypatch)
+    monkeypatch.setattr(ops, 'dispatch', edit_worker())
+    def reviewer(adapter, task, packet, should_stop):
+        ledger.transition(run_id, ['running'], 'cancel_requested')
+        assert should_stop()
+        return AgentResult(execution_id='r', task_id=task.task_id, status='cancelled', summary='stopped'), {}
+    monkeypatch.setattr(ops, 'review_dispatch', reviewer)
+    run_id = ops.submit(ledger, repo, 'bump version')
+    assert ops.process(ledger, run_id) == 'cancelled'
+
+
+def test_revise_continues_from_previous_diff(env, monkeypatch):
+    ledger, repo = env
+    monkeypatch.setattr(ops, 'dispatch', edit_worker())
+    first = ops.submit(ledger, repo, 'bump version')
+    ops.process(ledger, first)
+    assert ops.revise(ledger, first, '   ') is None
+    second = ops.revise(ledger, first, 'also add a changelog')
+    assert ledger.status(first) == 'revised' and ledger.run(second)['parent'] == first
+    assert 'also add a changelog' in ledger.run(second)['task']['objective']
+    assert ops.revise(ledger, first, 'again') is None  # superseded runs cannot fork twice
+    seen = {}
+    def second_worker(adapter, task, cwd, timeout, should_stop):
+        seen['start'] = (cwd / 'app.txt').read_text()
+        (cwd / 'CHANGELOG.md').write_text('v2\n', encoding='utf-8')
+        return AgentResult(execution_id='e', task_id=task.task_id, status='completed', summary='changelog'), {}
+    monkeypatch.setattr(ops, 'dispatch', second_worker)
+    assert ops.process(ledger, second) == 'needs_approval'
+    assert seen['start'] == 'v2\n'  # the worker saw the previous attempt
+    diff = ledger.run(second)['diff']
+    assert '+v2' in diff and 'CHANGELOG.md' in diff and 'new.txt' in diff  # cumulative against the base
+    assert ops.approve(ledger, second) and (repo / 'CHANGELOG.md').exists() and (repo / 'new.txt').exists()

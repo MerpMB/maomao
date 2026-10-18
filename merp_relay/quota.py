@@ -1,6 +1,9 @@
 """Real subscription quota from local runtime output; missing or stale data stays unknown."""
 import json
 import os
+import subprocess
+import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from .contracts import ResourceObservation
@@ -38,25 +41,36 @@ def _tail_lines(path, limit=1024 * 1024):
 
 
 def codex_observation(sessions=CODEX_SESSIONS):
-    """Latest `token_count.rate_limits` in Codex rollout logs (`codex exec` may omit it)."""
+    """Newest `token_count.rate_limits` reading across recent Codex rollout logs.
+
+    Newest reading, not newest file: a long-lived desktop thread keeps touching an old log.
+    """
     files = sorted(sessions.rglob('rollout-*.jsonl'), key=lambda p: p.stat().st_mtime, reverse=True)
-    for path in files[:5]:
-        for line in reversed(_tail_lines(path)):
-            if '"rate_limits"' not in line:
-                continue
-            try:
-                event = json.loads(line)
-                limits = event['payload']['rate_limits']
-                observed = datetime.fromisoformat(event['timestamp'].replace('Z', '+00:00'))
-                windows = [{'name': f"{limits[k]['window_minutes']}m", 'used': limits[k]['used_percent'] / 100,
-                            'resets_at': _ts(limits[k]['resets_at']),
-                            'exhausted': limits[k]['used_percent'] >= 100}
-                           for k in ('primary', 'secondary') if isinstance(limits.get(k), dict)]
-            except (ValueError, KeyError, TypeError):
-                continue
-            if windows:
-                exhausted = bool(limits.get('rate_limit_reached_type')) or any(w['exhausted'] for w in windows)
-                return _observation('codex-local', 'codex rollout token_count', observed, windows, exhausted), windows
+    best = (None, [])
+    for path in files[:8]:
+        found = _codex_latest(path)
+        if found[0] and (best[0] is None or found[0].observed_at > best[0].observed_at):
+            best = found
+    return best
+
+
+def _codex_latest(path):
+    for line in reversed(_tail_lines(path)):
+        if '"rate_limits"' not in line:
+            continue
+        try:
+            event = json.loads(line)
+            limits = event['payload']['rate_limits']
+            observed = datetime.fromisoformat(event['timestamp'].replace('Z', '+00:00'))
+            windows = [{'name': f"{limits[k]['window_minutes']}m", 'used': limits[k]['used_percent'] / 100,
+                        'resets_at': _ts(limits[k]['resets_at']),
+                        'exhausted': limits[k]['used_percent'] >= 100}
+                       for k in ('primary', 'secondary') if isinstance(limits.get(k), dict)]
+        except (ValueError, KeyError, TypeError):
+            continue
+        if windows:
+            exhausted = bool(limits.get('rate_limit_reached_type')) or any(w['exhausted'] for w in windows)
+            return _observation('codex-local', 'codex rollout token_count', observed, windows, exhausted), windows
     return None, []
 
 
@@ -79,8 +93,16 @@ def claude_observation(cache=CLAUDE_CACHE):
     for line in _tail_lines(cache):
         try:
             row = json.loads(line)
-            latest[row['info']['rateLimitType']] = row
-        except (ValueError, KeyError, TypeError):
+            info = row['info']
+            # 2.1.302+ reports every window in `unifiedWindows`; older versions only the binding one.
+            for name, window in (info.get('unifiedWindows') or {}).items():
+                if isinstance(window, dict):
+                    status = info.get('status') if name == info.get('rateLimitType') else 'allowed'
+                    latest[name] = {'observed_at': row['observed_at'],
+                                    'info': {**window, 'rateLimitType': name, 'status': status}}
+            latest[info['rateLimitType']] = {**row, 'info': {**latest.get(info['rateLimitType'], {}).get('info', {}),
+                                                             **{k: v for k, v in info.items() if k != 'unifiedWindows'}}}
+        except (ValueError, KeyError, TypeError, AttributeError):
             continue
     if not latest:
         return None, []
@@ -92,8 +114,61 @@ def claude_observation(cache=CLAUDE_CACHE):
                         'resets_at': _ts(info['resetsAt']) if isinstance(info.get('resetsAt'), (int, float)) else None,
                         'exhausted': info.get('status') == 'rejected', 'status': info.get('status')})
     observed = max(datetime.fromisoformat(r['observed_at']) for r in latest.values())
+    for w in windows:
+        if w['resets_at'] and w['resets_at'] <= observed:  # window has reset since that reading
+            w.update(used=None, exhausted=False, status='reset since last seen')
     exhausted = any(w['exhausted'] for w in windows)
     return _observation('claude-local', 'claude stream-json rate_limit_event', observed, windows, exhausted), windows
+
+
+_refreshing = threading.Lock()
+
+
+def refresh(timeout=90):
+    """Ask both CLIs for a fresh reading with one tiny call each (Claude via Haiku: cheapest).
+
+    The readings come back through the normal sources: Claude's rate_limit_event and Codex's rollout log.
+    Returns per-CLI outcome; None if a refresh is already running.
+    """
+    from .adapters import codex_executable, subscription_env
+    import shutil
+    if not _refreshing.acquire(blocking=False):
+        return None
+    outcome = {}
+    try:
+        with tempfile.TemporaryDirectory(prefix='merp-quota-') as cwd:
+            calls = {
+                'claude': [shutil.which('claude'), '-p', '--model', 'haiku', '--tools', '', '--safe-mode',
+                           '--no-session-persistence', '--output-format', 'stream-json', '--verbose'],
+                'codex': [codex_executable(), 'exec', '--skip-git-repo-check', '--sandbox', 'read-only',
+                          '-c', 'model_reasoning_effort="low"', '--json', '-'],
+            }
+            for name, command in calls.items():
+                if not command[0]:
+                    outcome[name] = 'CLI not found'
+                    continue
+                try:
+                    p = subprocess.run(command, input=b'Reply with exactly: ok', capture_output=True, cwd=cwd,
+                                       env=subscription_env(), timeout=timeout)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    outcome[name] = f'failed: {type(e).__name__}'
+                    continue
+                if name == 'claude':
+                    infos = []
+                    for line in p.stdout.decode('utf-8', errors='replace').splitlines():
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(event, dict) and event.get('type') == 'rate_limit_event':
+                            infos.append(event.get('rate_limit_info'))
+                    record_claude([i for i in infos if isinstance(i, dict)])
+                    outcome[name] = 'refreshed' if infos else f'no rate data (exit {p.returncode})'
+                else:
+                    outcome[name] = 'refreshed' if p.returncode == 0 else f'failed (exit {p.returncode})'
+    finally:
+        _refreshing.release()
+    return outcome
 
 
 def main():

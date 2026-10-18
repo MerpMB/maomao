@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created_at TEXT, updated_a
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, at TEXT,
     type TEXT, data TEXT);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY, created_at TEXT, asked_by TEXT, question TEXT,
+    project TEXT, run_id TEXT, status TEXT, answer TEXT, answered_at TEXT);
 '''
 
 
@@ -27,14 +29,18 @@ class Ledger:
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript(SCHEMA)
+        columns = {r[1] for r in self.db.execute('PRAGMA table_info(runs)')}
+        for name in ('parent', 'worker'):  # M5 fix-round lineage, V2 lead-chosen worker
+            if name not in columns:
+                self.db.execute(f'ALTER TABLE runs ADD COLUMN {name} TEXT')
 
-    def submit(self, task, repo, timeout=900):
+    def submit(self, task, repo, timeout=900, parent=None, worker=None):
         run_id = 'r-' + uuid4().hex[:8]
         now = _now()
-        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout) '
-                        'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout))
-        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo))
+        self.db.execute('INSERT INTO runs (id, created_at, updated_at, status, task, repo, timeout, parent, worker) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (run_id, now, now, 'queued', task.model_dump_json(), str(repo), timeout, parent, worker))
+        self.event(run_id, 'submitted', kind=task.kind, repo=str(repo), parent=parent, worker=worker)
         return run_id
 
     def update(self, run_id, **fields):
@@ -92,6 +98,30 @@ class Ledger:
         self.db.execute('INSERT INTO settings (key, value) VALUES (?, ?) '
                         'ON CONFLICT(key) DO UPDATE SET value = excluded.value', (key, value))
         self.event(None, 'setting', key=key, value=value)
+
+    def ask(self, question, asked_by, project=None, run_id=None):
+        qid = 'q-' + uuid4().hex[:8]
+        self.db.execute('INSERT INTO questions (id, created_at, asked_by, question, project, run_id, status) '
+                        'VALUES (?, ?, ?, ?, ?, ?, ?)', (qid, _now(), asked_by, question, project, run_id, 'open'))
+        self.event(run_id, 'question', id=qid, asked_by=asked_by, question=question)
+        return qid
+
+    def answer(self, qid, answer):
+        changed = self.db.execute("UPDATE questions SET status = 'answered', answer = ?, answered_at = ? "
+                                  "WHERE id = ? AND status = 'open'", (answer, _now(), qid)).rowcount == 1
+        if changed:
+            self.event(self.question(qid)['run_id'], 'answer', id=qid, answer=answer)
+        return changed
+
+    def question(self, qid):
+        row = self.db.execute('SELECT * FROM questions WHERE id = ?', (qid,)).fetchone()
+        return dict(row) if row else None
+
+    def questions(self, status=None, limit=50):
+        sql, args = 'SELECT * FROM questions', []
+        if status:
+            sql, args = sql + ' WHERE status = ?', [status]
+        return [dict(r) for r in self.db.execute(sql + ' ORDER BY created_at DESC LIMIT ?', args + [limit])]
 
     def events(self, run_id=None, after=0, limit=200):
         sql, args = 'SELECT * FROM events WHERE id > ?', [after]

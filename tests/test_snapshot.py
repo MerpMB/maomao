@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 import pytest
 from pydantic import ValidationError
-from merp_relay.adapters import ClaudeAdapter, CodexAdapter, execute_snapshot, normalize_claude
+from merp_relay.adapters import ClaudeAdapter, CodexAdapter, execute_repo, execute_snapshot, normalize_claude
 from merp_relay.boundary import BoundaryEvidence, admission_reasons, runtime_profile
 from merp_relay.conformance import assess_cases
 from merp_relay.contracts import Artifact, AgentResult, Control, SNAPSHOT_CONTROLS, TaskRequest
@@ -112,7 +112,7 @@ def test_claude_safe_stdin_command_synthetic(monkeypatch):
     adapter = ClaudeAdapter()
     monkeypatch.setattr(adapter, 'probe', lambda: {'status': 'available', 'version': '2.1.240 (Claude Code)'})
     seen = {}
-    def fake_run(command, prompt, cwd, env, timeout):
+    def fake_run(command, prompt, cwd, env, timeout, should_stop=None):
         seen.update(command=command, prompt=prompt, env=env)
         envelope = {'type': 'result', 'subtype': 'success', 'is_error': False,
             'structured_output': {'summary': 'ok', 'findings': [], 'source_refs': [], 'unresolved': []}}
@@ -125,6 +125,26 @@ def test_claude_safe_stdin_command_synthetic(monkeypatch):
     assert '--safe-mode' in seen['command'] and seen['command'][seen['command'].index('--tools')+1] == ''
     assert 'unsafe shell string' in seen['prompt'] and 'unsafe shell string' not in str(seen['command'])
     assert 'ANTHROPIC_API_KEY' not in seen['env'] and '--bare' not in seen['command']
+
+
+def test_claude_repo_run_gets_resolved_cwd(monkeypatch, tmp_path):
+    # Claude denies unresolved Windows paths (8.3 short names) as suspicious, so cwd is resolved first.
+    adapter = ClaudeAdapter()
+    monkeypatch.setattr(adapter, 'probe', lambda: {'status': 'available', 'version': '2.1.240 (Claude Code)'})
+    seen = {}
+    def fake_run(command, prompt, cwd, env, timeout, should_stop):
+        seen.update(command=command, cwd=cwd)
+        envelope = {'type': 'result', 'subtype': 'success', 'is_error': False,
+            'structured_output': {'summary': 'ok', 'findings': [], 'source_refs': [], 'unresolved': []}}
+        return json.dumps(envelope), 0, None
+    monkeypatch.setattr('merp_relay.adapters.run_bounded', fake_run)
+    monkeypatch.setattr('merp_relay.quota.record_claude', lambda infos: None)
+    task = TaskRequest(task_id='t', objective='edit', kind='IMPLEMENT', execution_mode='repository_access',
+        completion_criteria=('done',), read_scope=('.',))
+    result, metrics = execute_repo(adapter, task, tmp_path / 'sub' / '..')
+    assert result.status == 'completed' and metrics['runtime_version'] == '2.1.240 (Claude Code)'
+    assert seen['cwd'] == tmp_path.resolve()
+    assert seen['command'][seen['command'].index('--permission-mode') + 1] == 'acceptEdits'
 
 
 def test_scope_mismatch_rejected():

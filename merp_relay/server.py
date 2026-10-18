@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from . import ops
 from .ledger import Ledger
-from .quota import STATE, claude_observation, codex_observation
+from .quota import STATE, claude_observation, codex_observation, refresh
 
 STATIC = Path(__file__).parent / 'static'
 # Rejecting foreign Host headers blocks DNS-rebinding pages from reading the API.
@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, page.encode(), 'text/html; charset=utf-8')
         if path == '/api/status':
             ledger = Ledger(self.db_path)
-            return self._send(200, {'paused': ops.paused(ledger), 'runner': self.server_runner_alive(),
+            return self._send(200, {'paused': ops.paused(ledger), 'runner': ops.runner_active(),
                                     'queued': len(ledger.with_status('queued')),
                                     'recent_repos': list(dict.fromkeys(r['repo'] for r in ledger.runs(50)))[:8]})
         if path == '/app.js':
@@ -95,18 +95,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pools())
         if path == '/api/runs':
             return self._send(200, [run_summary(r) for r in ledger.runs(100)])
+        if path == '/api/inbox':
+            return self._send(200, ledger.questions(limit=30))
         if path.startswith('/api/runs/'):
             run = ledger.run(path.rsplit('/', 1)[1])
             if not run:
                 return self._send(404, {'error': 'unknown run'})
             return self._send(200, {**run_summary(run), 'diff': run['diff'], 'routing': run['routing'],
                 'artifact': run['artifact'], 'base_commit': run['base_commit'],
-                'timeout': run['timeout'], 'events': ledger.events(run['id'])})
+                'timeout': run['timeout'], 'parent': run.get('parent'), 'events': ledger.events(run['id'])})
         self._send(404, {'error': 'not found'})
-
-    def server_runner_alive(self):
-        runner = getattr(self.server, 'runner', None)
-        return bool(runner and runner.is_alive())
 
     def do_POST(self):
         origin = self.headers.get('Origin')
@@ -125,6 +123,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {'error': str(e)})
         ledger = Ledger(self.db_path)
         parts = (urlsplit(self.path).path.rstrip('/') or '/').split('/')
+        if parts == ['', 'api', 'quota', 'refresh']:
+            outcome = refresh()  # one tiny call per CLI, ~10-30 s
+            if outcome is None:
+                return self._send(409, {'error': 'a refresh is already running'})
+            ledger.event(None, 'quota_refresh', **outcome)
+            return self._send(200, {'outcome': outcome, 'pools': pools()})
         if parts == ['', 'api', 'routing']:
             if not isinstance(body.get('paused'), bool):
                 return self._send(400, {'error': 'paused must be true or false'})
@@ -132,9 +136,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {'paused': body['paused']})
         if parts == ['', 'api', 'runs']:
             return self._submit(ledger, body)
+        if len(parts) == 5 and parts[:3] == ['', 'api', 'inbox'] and parts[4] == 'answer':
+            answer = body.get('answer')
+            if not isinstance(answer, str) or not answer.strip() or len(answer) > 4000:
+                return self._send(400, {'error': 'answer must be 1-4000 characters'})
+            if not ledger.answer(parts[3], answer.strip()):
+                return self._send(409, {'error': 'question not open'})
+            return self._send(200, {'status': 'answered'})
+        if len(parts) == 5 and parts[:3] == ['', 'api', 'runs'] and parts[4] == 'revise':
+            feedback = body.get('feedback')
+            if not isinstance(feedback, str) or not feedback.strip() or len(feedback) > 2000:
+                return self._send(400, {'error': 'feedback must be 1-2000 characters'})
+            if not ledger.run(parts[3]):
+                return self._send(404, {'error': 'unknown run'})
+            new_id = ops.revise(ledger, parts[3], feedback)
+            if not new_id:
+                return self._send(409, {'error': f'not allowed in status {ledger.status(parts[3])}'})
+            return self._send(201, {'id': new_id})
         if len(parts) == 5 and parts[:3] == ['', 'api', 'runs'] and parts[4] in ('approve', 'reject', 'cancel'):
             if not ledger.run(parts[3]):
                 return self._send(404, {'error': 'unknown run'})
+            if parts[4] in ('approve', 'reject'):
+                ledger.event(parts[3], 'decision', by='owner', action=parts[4])
             ok = getattr(ops, parts[4])(ledger, parts[3])
             if ok:
                 return self._send(200, {'status': ledger.status(parts[3])})
@@ -197,7 +220,7 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     server.daemon_threads = True
     if not args.no_runner:
-        server.runner = threading.Thread(target=ops.work, args=(Ledger(Handler.db_path), True), daemon=True)
+        server.runner = threading.Thread(target=ops.run_forever, args=(lambda: Ledger(Handler.db_path),), daemon=True)
         server.runner.start()
     print(f'Merp Relay ops dashboard: http://127.0.0.1:{args.port}/', flush=True)
     server.serve_forever()

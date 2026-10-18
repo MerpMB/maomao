@@ -169,7 +169,8 @@ def normalize_claude(text, returncode, execution_id, task_id):
         lines = [json.loads(line) for line in text.splitlines() if line.strip()]
         rate_limits += [e['rate_limit_info'] for e in lines if isinstance(e, dict)
                        and e.get('type') == 'rate_limit_event' and isinstance(e.get('rate_limit_info'), dict)]
-        envelope = lines[-1] if lines else None
+        # 2.1.240 emits `system` lines (task_summary) after the result envelope.
+        envelope = next((e for e in reversed(lines) if isinstance(e, dict) and e.get('type') == 'result'), None)
         if not isinstance(envelope, dict) or envelope.get('type') != 'result' or \
                 envelope.get('subtype') != 'success' or envelope.get('is_error') is not False or returncode:
             raise ValueError('incomplete result')
@@ -189,7 +190,7 @@ def normalize_claude(text, returncode, execution_id, task_id):
             'native_usage': {}, 'rate_limits': rate_limits}
 
 
-def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=60, workdir=None):
+def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=60, workdir=None, should_stop=None):
     """Explicit weaker experiment never implies normal snapshot admission."""
     from .boundary import runtime_profile
     from .eligibility import task_profile_eligibility
@@ -221,7 +222,7 @@ def execute_snapshot(adapter, task, packet, *, weaker_experiment=False, timeout=
                 '-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
                 '--output-schema', str(schema), '-']
         try:
-            stdout, code, cancellation = run_bounded(command, prompt, workdir or temp, env, timeout)
+            stdout, code, cancellation = run_bounded(command, prompt, workdir or temp, env, timeout, should_stop)
         except OSError:
             return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
                 summary='runtime launch failed; diagnostics suppressed'), {'native_usage': {}}
@@ -281,6 +282,8 @@ def execute_repo(adapter, task, cwd, *, timeout=900, should_stop=None):
     if task.execution_mode != 'repository_access' or task.tools:
         raise ValueError('repo execution requires a tool-free repository_access task')
     is_claude = isinstance(adapter, ClaudeAdapter)
+    # Claude's file tools deny 8.3 short names (GAMING~1) as suspicious; resolve expands them.
+    cwd = Path(cwd).resolve()
     probe = adapter.probe()
     if probe.get('status') != 'available':
         return AgentResult(execution_id=identity, task_id=task.task_id, status='blocked',
