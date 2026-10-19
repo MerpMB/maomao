@@ -6,6 +6,7 @@ from uuid import uuid4
 from .quota import STATE
 
 JSON_FIELDS = ('task', 'artifact', 'routing', 'options', 'depends_on')
+RELEASE_JSON = ('commits', 'files', 'bumps', 'result')
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, created_at TEXT, updated_at TEXT, status TEXT,
     task TEXT, repo TEXT, timeout INTEGER, resource_id TEXT, base_commit TEXT, diff TEXT,
@@ -15,6 +16,9 @@ CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id 
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY, created_at TEXT, asked_by TEXT, question TEXT,
     project TEXT, run_id TEXT, status TEXT, answer TEXT, answered_at TEXT);
+CREATE TABLE IF NOT EXISTS locks (target TEXT PRIMARY KEY, holder TEXT, reason TEXT, acquired_at TEXT);
+CREATE TABLE IF NOT EXISTS releases (id TEXT PRIMARY KEY, created_at TEXT, updated_at TEXT, status TEXT, target TEXT,
+    repo TEXT, commits TEXT, files TEXT, bumps TEXT, summary TEXT, requested_by TEXT, project TEXT, result TEXT);
 '''
 
 
@@ -126,6 +130,63 @@ class Ledger:
         if status:
             sql, args = sql + ' WHERE status = ?', [status]
         return [dict(r) for r in self.db.execute(sql + ' ORDER BY created_at DESC LIMIT ?', args + [limit])]
+
+    # Production locks: one holder per target. INSERT on the primary key is the atomic test-and-set.
+    def lock(self, target, holder, reason=''):
+        try:
+            self.db.execute('INSERT INTO locks (target, holder, reason, acquired_at) VALUES (?, ?, ?, ?)',
+                            (target, holder, reason, _now()))
+        except sqlite3.IntegrityError:
+            return False
+        self.event(None, 'lock', target=target, holder=holder, reason=reason)
+        return True
+
+    def unlock(self, target, holder=None):
+        """Release `target`; with a holder, only that holder's lock (None = owner force-release)."""
+        sql, args = 'DELETE FROM locks WHERE target = ?', [target]
+        if holder is not None:
+            sql, args = sql + ' AND holder = ?', args + [holder]
+        changed = self.db.execute(sql, args).rowcount == 1
+        if changed:
+            self.event(None, 'unlock', target=target, holder=holder or 'owner')
+        return changed
+
+    def locks(self):
+        return [dict(r) for r in self.db.execute('SELECT * FROM locks ORDER BY acquired_at')]
+
+    def create_release(self, target, repo, commits, files, bumps, summary, requested_by, project=None):
+        release_id = 'x-' + uuid4().hex[:8]
+        now = _now()
+        self.db.execute('INSERT INTO releases (id, created_at, updated_at, status, target, repo, commits, files, bumps, '
+                        'summary, requested_by, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        (release_id, now, now, 'needs_owner', target, str(repo), json.dumps(commits),
+                         json.dumps(files), json.dumps(bumps), summary, requested_by, project))
+        self.event(release_id, 'release_planned', target=target, files=len(files), requested_by=requested_by)
+        return release_id
+
+    def release_transition(self, release_id, allowed, status, **fields):
+        fields = {k: json.dumps(v) if k in RELEASE_JSON else v for k, v in {**fields, 'status': status}.items()}
+        fields['updated_at'] = _now()
+        sql = 'UPDATE releases SET ' + ', '.join(f'{k} = ?' for k in fields) + ' WHERE id = ?'
+        sql += f' AND status IN ({",".join("?" * len(allowed))})'
+        changed = self.db.execute(sql, [*fields.values(), release_id, *allowed]).rowcount == 1
+        if changed:
+            self.event(release_id, 'release_' + status)
+        return changed
+
+    def _release(self, row):
+        out = dict(row)
+        for k in RELEASE_JSON:
+            out[k] = json.loads(out[k]) if out[k] else None
+        return out
+
+    def release(self, release_id):
+        row = self.db.execute('SELECT * FROM releases WHERE id = ?', (release_id,)).fetchone()
+        return self._release(row) if row else None
+
+    def releases(self, limit=30):
+        return [self._release(r) for r in self.db.execute('SELECT * FROM releases ORDER BY created_at DESC LIMIT ?',
+                                                          (limit,))]
 
     def events(self, run_id=None, after=0, limit=200):
         sql, args = 'SELECT * FROM events WHERE id > ?', [after]

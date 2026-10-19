@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from . import ops, trace
+from . import ops, release, trace
 from .ledger import Ledger
 from .quota import STATE, claude_observation, codex_observation, refresh
 
@@ -98,6 +98,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/inbox':
             return self._send(200, ledger.questions(limit=30))
         hq = ledger.setting('hq_path')
+        if path == '/api/releases':
+            return self._send(200, {'releases': [{**r, 'result': {k: v for k, v in (r['result'] or {}).items()
+                                                                   if k != 'output'}} for r in ledger.releases(30)],
+                                    'locks': ledger.locks(),
+                                    'targets': sorted(release.targets(hq)) if hq else []})
+        if path.startswith('/api/releases/'):
+            rel = ledger.release(path.rsplit('/', 1)[1])
+            return self._send(200, {**rel, 'events': ledger.events(rel['id'])}) if rel else \
+                self._send(404, {'error': 'unknown release'})
         if path == '/api/projects':
             return self._send(200, {'hq': hq, 'projects': trace.projects(hq) if hq else []})
         if path.startswith('/api/projects/'):
@@ -144,6 +153,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {'paused': body['paused']})
         if parts == ['', 'api', 'runs']:
             return self._submit(ledger, body)
+        if len(parts) == 5 and parts[:3] == ['', 'api', 'releases'] and parts[4] in ('approve', 'reject'):
+            if not ledger.release(parts[3]):
+                return self._send(404, {'error': 'unknown release'})
+            hq = ledger.setting('hq_path')
+            if parts[4] == 'approve' and not hq:
+                return self._send(409, {'error': 'RelayHQ path unknown; start a lead once'})
+            ok = (release.approve(ledger, hq, parts[3], ledger_factory=lambda: Ledger(self.db_path))
+                  if parts[4] == 'approve' else release.reject(ledger, parts[3]))
+            if not ok:
+                return self._send(409, {'error': f'not allowed in status {ledger.release(parts[3])["status"]}'})
+            return self._send(200, {'status': ledger.release(parts[3])['status']})
+        if len(parts) == 5 and parts[:3] == ['', 'api', 'locks'] and parts[4] == 'release':
+            if not ledger.unlock(parts[3]):
+                return self._send(409, {'error': 'no lock on that target'})
+            return self._send(200, {'locks': ledger.locks()})
         if len(parts) == 5 and parts[:3] == ['', 'api', 'inbox'] and parts[4] == 'answer':
             answer = body.get('answer')
             if not isinstance(answer, str) or not answer.strip() or len(answer) > 4000:
