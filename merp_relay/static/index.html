@@ -31,7 +31,10 @@ header .sp { flex: 1; }
 main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; padding: 16px 20px; }
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; overflow-x: auto; }
 section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 0 0 10px; }
-#pools, #new, #inbox, #trace { grid-column: 1 / -1; }
+#pools, #new, #inbox, #trace, #releases { grid-column: 1 / -1; }
+.release { border-bottom: 1px solid var(--line); padding: 8px 0; display: grid; gap: 4px; }
+.release:last-child { border-bottom: 0; }
+.release ul { margin: 2px 0 0; padding-left: 18px; font: 12.5px/1.5 var(--mono); }
 #trace details { margin: 6px 0; } #trace summary { cursor: pointer; color: var(--ink-2); }
 #trace pre.doc { white-space: pre-wrap; font: 13px/1.5 var(--mono); background: var(--bg); padding: 8px 10px;
   border-radius: 6px; max-height: 320px; overflow: auto; margin: 6px 0 0; }
@@ -111,6 +114,10 @@ textarea { resize: vertical; min-height: 64px; }
 <main>
   <section id="inbox" aria-labelledby="inbox-h" hidden><h2 id="inbox-h">Inbox — the lead is asking</h2>
     <div id="questions"></div></section>
+  <section id="releases" aria-labelledby="releases-h"><h2 id="releases-h">Releases — production changes need you</h2>
+    <div id="locks" class="meta"></div>
+    <div id="release-list"><div class="empty">No releases yet. The lead proposes them with release_plan.</div></div>
+  </section>
   <div id="pools" aria-live="polite"></div>
   <section id="new" aria-labelledby="new-h"><h2 id="new-h">New task</h2>
     <form class="submit" id="submit-form">

@@ -7,6 +7,8 @@ const STATUS = {
   completed: ['Completed', '--good'], rejected: ['Rejected', '--muted'], failed: ['Failed', '--critical'],
   cancelled: ['Cancelled', '--muted'], blocked: ['Blocked', '--serious'], revised: ['Superseded', '--muted'],
   available: ['Available', '--good'], exhausted: ['Exhausted', '--critical'], unknown: ['Unknown', '--muted'],
+  needs_owner: ['Needs you', '--warning'], approved: ['Approved', '--accent'], deployed: ['Deployed', '--good'],
+  rolled_back: ['Rolled back', '--serious'], refused: ['Refused', '--serious'],
 };
 const WINDOW_NAMES = { five_hour: '5-hour', '300m': '5-hour', seven_day: '7-day', '10080m': '7-day' };
 let selected = null;
@@ -265,6 +267,7 @@ function connect() {
     if (e.type === 'setting' || e.type === 'submitted') loadStatus();
     if (e.type === 'question' || e.type === 'answer') loadInbox();
     if (['decision', 'reviewed', 'submitted', 'answer', 'applied'].includes(e.type)) loadTrace();
+    if (e.type.startsWith('release_') || ['lock', 'unlock', 'decision'].includes(e.type)) loadReleases();
   };
 }
 
@@ -297,6 +300,49 @@ async function loadInbox() {
       el('div', { class: 'meta' }, `${q.asked_by} · ${ago(q.created_at)} ago`, q.project ? ` · ${q.project}` : '',
         q.run_id ? [' · ', runLink(q.run_id)] : null),
       el('div', {}, q.question), area, el('div', { class: 'actions' }, send), notice);
+  }));
+}
+
+async function loadReleases() {
+  let data;
+  try { data = await getJSON('/api/releases'); } catch (_) { return; }
+  const locks = document.getElementById('locks');
+  locks.replaceChildren(...(data.locks.length ? data.locks.map((l) => {
+    const free = el('button', { type: 'button', class: 'danger' }, 'Force release');
+    free.addEventListener('click', async () => {
+      if (!confirm(`Release the lock on ${l.target} held by ${l.holder}?\nOnly do this if that work has stopped.`)) return;
+      try { await post(`/api/locks/${encodeURIComponent(l.target)}/release`); } finally { loadReleases(); }
+    });
+    return el('div', { class: 'actions' }, `🔒 ${l.target} — ${l.holder}: ${l.reason || ''} (${ago(l.acquired_at)} ago)`, free);
+  }) : [`Targets: ${data.targets.join(', ') || 'none in RelayHQ/targets'} · no locks held`]));
+  const list = document.getElementById('release-list');
+  if (!data.releases.length) return;
+  list.replaceChildren(...data.releases.map((x) => {
+    const notice = el('div', { class: 'notice error', role: 'alert', hidden: '' });
+    const act = (label, verb, cls, text) => {
+      const b = el('button', { type: 'button', class: cls }, label);
+      b.addEventListener('click', async () => {
+        if (!confirm(text)) return;
+        b.disabled = true;
+        try { await post(`/api/releases/${encodeURIComponent(x.id)}/${verb}`); }
+        catch (err) { notice.textContent = err.message; notice.hidden = false; }
+        finally { b.disabled = false; loadReleases(); }
+      });
+      return b;
+    };
+    const files = x.files.map((f) => `${f.path}${f.new ? ' (new)' : ''}`);
+    return el('div', { class: 'release' },
+      el('div', { class: 'actions' }, badge(x.status), el('span', { class: 'mono' }, x.id), ` → ${x.target}`,
+        el('span', { class: 'meta' }, `${x.requested_by} · ${ago(x.created_at)} ago · ${x.commits.length} commit(s)`)),
+      el('div', {}, x.summary),
+      el('details', {}, el('summary', { class: 'meta' }, `${files.length} file(s)${x.bumps.length ? `, ${x.bumps.length} version bump(s)` : ''}`),
+        el('ul', {}, files.map((f) => el('li', {}, f)), x.bumps.map((b) => el('li', {}, `bump ${b[0]}: ${b[2]}`)))),
+      x.result && x.result.line ? el('div', { class: 'meta' }, x.result.line) : null,
+      x.status === 'needs_owner' ? el('div', { class: 'actions' },
+        act('Approve & release', 'approve', 'primary',
+          `Release ${files.length} file(s) to ${x.target}?\nThe server backs up first, verifies the live page and rolls back on failure.`),
+        act('Reject', 'reject', 'danger', 'Reject this release? It stays in the ledger.')) : null,
+      notice);
   }));
 }
 
@@ -397,6 +443,7 @@ document.getElementById('submit-form').addEventListener('submit', async (ev) => 
 theme();
 loadStatus(); setInterval(loadStatus, 10000);
 loadInbox(); setInterval(loadInbox, 15000);
+loadReleases(); setInterval(loadReleases, 15000);
 loadProjects(); setInterval(loadProjects, 30000);
 const tick = () => { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { timeZoneName: 'short' }); };
 tick(); setInterval(tick, 1000);

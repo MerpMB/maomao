@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from . import ops
+from . import ops, release
 from .ledger import Ledger
 from .server import pools, run_summary
 
@@ -212,6 +212,67 @@ def t_inbox(ledger, args):
     return {'questions': ledger.questions(status=args.get('status'), limit=20)}
 
 
+def _hq():
+    return str(hq_dir())
+
+
+def t_targets(ledger, args):
+    locks = {l['target']: l for l in ledger.locks()}
+    return {'targets': [{**{k: v for k, v in cfg.items() if k in ('name', 'page_url', 'paths', 'invalid')},
+                         'lock': locks.get(name)} for name, cfg in release.targets(_hq()).items()]}
+
+
+def t_release_plan(ledger, args):
+    repo = _arg(args, 'repo', str)
+    if not Path(repo).is_dir():
+        raise ValueError('repo must be an existing directory')
+    commits = args.get('commits')
+    if not isinstance(commits, list) or not all(isinstance(c, str) and c for c in commits):
+        raise ValueError('commits must be a list of commit ids, oldest first')
+    release_id = release.plan(ledger, _hq(), _arg(args, 'target', str), repo, commits, args.get('bumps') or [],
+                              _arg(args, 'summary', str, limit=2000), requested_by=args.get('requested_by') or 'lead',
+                              project=args.get('project'))
+    return {'release_id': release_id, 'status': 'needs_owner', **_release_view(ledger.release(release_id)),
+            'note': 'only the owner can approve a release (dashboard → Releases); check release_status later'}
+
+
+def _release_view(rel):
+    return {k: rel[k] for k in ('id', 'status', 'target', 'summary', 'commits', 'bumps', 'requested_by', 'created_at',
+                                'updated_at')} | {'files': [f['path'] + (' (new)' if f['new'] else '') for f in rel['files']],
+                                                  'result': {k: v for k, v in (rel['result'] or {}).items() if k != 'output'}}
+
+
+def t_release_status(ledger, args):
+    rid = args.get('release_id')
+    if rid:
+        rel = ledger.release(rid)
+        if not rel:
+            raise ValueError('unknown release')
+        out = _release_view(rel)
+        out['output_tail'] = ((rel['result'] or {}).get('output') or '')[-3000:]
+        return out
+    return {'releases': [_release_view(r) for r in ledger.releases(15)], 'locks': ledger.locks()}
+
+
+def t_lock(ledger, args):
+    """Lead-held lock, e.g. while another agent works on the target outside Relay."""
+    name = _arg(args, 'target', str)
+    release.target(_hq(), name)
+    ok = ledger.lock(name, 'lead', reason=_arg(args, 'reason', str, limit=200))
+    return {'locked': ok, 'locks': ledger.locks()}
+
+
+def t_unlock(ledger, args):
+    return {'unlocked': ledger.unlock(_arg(args, 'target', str), holder='lead'), 'locks': ledger.locks(),
+            'note': 'the lead can release only its own lock; the owner can force-release in the dashboard'}
+
+
+def t_health(ledger, args):
+    result = release.health(release.target(_hq(), _arg(args, 'target', str)))
+    ledger.event(None, 'health', **result)
+    return result
+
+
 S = {'type': 'string'}
 TOOLS = {
     'workers': (t_workers, 'List available workers, live quota per pool, runner and routing state. '
@@ -245,6 +306,21 @@ TOOLS = {
                    {'message': S}, ['message']),
     'inbox': (t_inbox, 'Read owner answers: one question by id, or the list (status open|answered).',
               {'question_id': S, 'status': S}),
+    'targets': (t_targets, 'Production targets defined in RelayHQ/targets/*.json, with their current lock.', {}),
+    'release_plan': (t_release_plan, 'Propose a production release built from committed changes in `repo` (commits '
+                     'oldest first; only files under the target\'s release paths). Optional `bumps` are exact '
+                     '[file, old, new] cache-busting replacements. Only the owner can approve; the release then runs a '
+                     'guarded script that backs up, verifies the live page and rolls back on failure.',
+                     {'target': S, 'repo': S, 'commits': {'type': 'array', 'items': S},
+                      'bumps': {'type': 'array', 'items': {'type': 'array', 'items': S}}, 'summary': S, 'project': S},
+                     ['target', 'repo', 'commits', 'summary']),
+    'release_status': (t_release_status, 'One release (with the script output tail) or the recent list plus locks.',
+                       {'release_id': S}),
+    'lock': (t_lock, 'Hold a target lock so no release runs there (e.g. while another agent works on it).',
+             {'target': S, 'reason': S}, ['target', 'reason']),
+    'unlock': (t_unlock, 'Release a lock the lead holds.', {'target': S}, ['target']),
+    'health': (t_health, 'Read-only check of a target\'s live page: size, markers and every linked asset.',
+               {'target': S}, ['target']),
 }
 
 
