@@ -171,3 +171,19 @@ def test_tier_options_validated_and_passed_to_cli(env, monkeypatch, tmp_path):
     claude_cmd, codex_cmd = seen['commands']
     assert claude_cmd[claude_cmd.index('--model') + 1] == 'sonnet' and claude_cmd[claude_cmd.index('--effort') + 1] == 'high'
     assert codex_cmd[codex_cmd.index('-m') + 1] == 'gpt-6-luna' and 'model_reasoning_effort="low"' in codex_cmd
+
+
+def test_base_commit_names_included_approved_runs(env, monkeypatch):
+    ledger, repo = env
+    monkeypatch.setattr(ops, 'dispatch', writer('app.txt', 'v2\n'))
+    first = ops.submit(ledger, repo, 'bump')
+    ops.work(ledger)
+    assert ops.approve(ledger, first)
+    seen = {}
+    def check(cwd):
+        seen['log'] = subprocess.run(['git', '-C', str(cwd), 'log', '-1', '--format=%s'],
+                                     capture_output=True, text=True).stdout
+    monkeypatch.setattr(ops, 'dispatch', writer('notes.txt', 'x\n', hook=check))
+    second = ops.submit(ledger, repo, 'after', depends_on=[first])
+    ops.work(ledger)
+    assert first in seen['log'] and 'approved runs' in seen['log']

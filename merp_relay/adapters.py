@@ -271,7 +271,9 @@ def finish(is_claude, stdout, code, identity, task, metrics, single_message=True
 
 REPO_PROMPT = ('Authorized repository task follows. The current directory is a disposable git worktree. '
     'Make only the file changes the objective needs, inside this directory. Do not commit, push, install '
-    'packages or touch anything outside it; an operator reviews the diff before it is applied. Return the '
+    'packages or touch anything outside it; an operator reviews the diff before it is applied. The worktree already '
+    'contains every change staged in the repository, including earlier approved runs (your dependencies); '
+    '`git log -1` names them. Build on them; do not ask for them again. Return the '
     'required JSON: summary, findings (what you changed and why), source_refs (paths), unresolved.\n'
     'AUTHORIZED_TASK\n')
 
