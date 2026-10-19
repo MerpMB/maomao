@@ -155,15 +155,26 @@ def dependency_state(ledger, run):
     return 'ready'
 
 
-def staged_base(repo, worktree):
+def staged_base(repo, worktree, ledger=None):
     """Start from HEAD plus what is already staged (approved earlier, or the owner's own staging),
-    so dependent work builds on approved changes. Returns the commit the diff is taken against."""
+    so dependent work builds on approved changes. Returns the commit the diff is taken against.
+    The base commit names the approved runs it contains, so workers can confirm their dependencies are present."""
     staged = git(repo, 'diff', '--cached', '--binary', 'HEAD')
     if staged:
         git(worktree, 'apply', '--index', '--binary', '-', stdin=staged)
+        included = applied_since_head(ledger, repo) if ledger else []
+        message = 'relay base: staged changes' + (f' (approved runs: {", ".join(included)})' if included else '')
         git(worktree, '-c', 'user.name=Relay', '-c', 'user.email=relay@relay.invalid',
-            'commit', '-q', '--no-verify', '-m', 'relay base: staged changes')
+            'commit', '-q', '--no-verify', '-m', message)
     return git(worktree, 'rev-parse', 'HEAD').strip()
+
+
+def applied_since_head(ledger, repo):
+    """Runs applied to this repo after its HEAD commit: their changes are what is staged now."""
+    head_time = datetime.fromisoformat(git(repo, 'log', '-1', '--format=%cI').strip())
+    return sorted(r['id'] for r in ledger.runs(500)
+                  if r['status'] == 'applied' and Path(r['repo']) == Path(repo)
+                  and datetime.fromisoformat(r['updated_at']) > head_time)
 
 
 def process(ledger, run_id, decision=None):
@@ -191,7 +202,7 @@ def process(ledger, run_id, decision=None):
             git(worktree, 'apply', '--index', '--binary', '-', stdin=parent['diff'])
         else:
             git(repo, 'worktree', 'add', '--detach', str(worktree), 'HEAD')
-            base = staged_base(repo, worktree)
+            base = staged_base(repo, worktree, ledger)
         ledger.update(run_id, base_commit=base)
         result, metrics = dispatch(profiles[decision.selected][0], task, worktree, run['timeout'],
                                    lambda: ledger.status(run_id) == 'cancel_requested',
