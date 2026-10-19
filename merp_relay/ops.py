@@ -11,6 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from . import shots
 from .adapters import ClaudeAdapter, CodexAdapter, execute_repo, execute_snapshot
 from .boundary import runtime_profile
 from .contracts import AgentResult, Artifact, TaskRequest
@@ -210,6 +211,8 @@ def process(ledger, run_id, decision=None):
         if result.status == 'completed':
             git(worktree, 'add', '-A')
             diff = git(worktree, 'diff', '--cached', '--binary', base)
+            if diff:  # opt-in per project; resets the disposable worktree to shoot the base too
+                shots.capture_run(ledger, run_id, run.get('project'), worktree, base, git)
     except Exception as e:  # keep the ledger truthful even when git or the adapter breaks
         result, metrics = AgentResult(execution_id='none', task_id=task.task_id, status='failed',
                                       summary=f'runner error: {type(e).__name__}'), {}

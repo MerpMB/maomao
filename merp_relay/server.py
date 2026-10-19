@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
-from . import ops, release, trace
+from . import ops, release, shots, trace
 from .ledger import Ledger
 from .quota import STATE, claude_observation, codex_observation, refresh
 
@@ -112,6 +112,9 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/projects/'):
             found = trace.trace(ledger, hq, path.rsplit('/', 1)[1]) if hq else None
             return self._send(200, found) if found else self._send(404, {'error': 'unknown project'})
+        if path.startswith('/api/runs/') and path.count('/') == 5 and path.split('/')[4] == 'shots':
+            found = shots.path(path.split('/')[3], path.split('/')[5])
+            return self._send(200, found.read_bytes(), 'image/png') if found else self._send(404, {'error': 'no such shot'})
         if path.startswith('/api/runs/'):
             run = ledger.run(path.rsplit('/', 1)[1])
             if not run:

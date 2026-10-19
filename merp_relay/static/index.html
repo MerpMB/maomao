@@ -32,6 +32,9 @@ main { display: grid; grid-template-columns: minmax(320px, 2fr) 3fr; gap: 16px; 
 section { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; min-width: 0; overflow-x: auto; }
 section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 0 0 10px; }
 #pools, #new, #inbox, #trace, #releases { grid-column: 1 / -1; }
+.shots { margin: 6px 0 10px; } .shots .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.shots figure { margin: 0; } .shots img { width: 100%; max-height: 520px; object-fit: cover; object-position: top;
+  border: 1px solid var(--line); border-radius: 6px; display: block; }
 .release { border-bottom: 1px solid var(--line); padding: 8px 0; display: grid; gap: 4px; }
 .release:last-child { border-bottom: 0; }
 .release ul { margin: 2px 0 0; padding-left: 18px; font: 12.5px/1.5 var(--mono); }

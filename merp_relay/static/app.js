@@ -133,6 +133,7 @@ async function loadDetail() {
       result.unresolved.length ? [el('h4', {}, 'Unresolved'), el('ul', { class: 'findings' }, result.unresolved.map((u) => el('li', {}, u)))] : null,
     ] : null,
     reviewSection(r.events),
+    shotsSection(r),
     el('h4', {}, r.diff_stats ? `Diff +${r.diff_stats.added} −${r.diff_stats.removed}` : 'Diff'),
     r.diff ? diffView(r.diff) : el('div', { class: 'meta' }, 'No changes proposed.'),
     el('h4', {}, 'Timeline'),
@@ -175,6 +176,22 @@ function reviewSection(events) {
     res.findings && res.findings.length ? el('ul', { class: 'findings' }, res.findings.map((f) => el('li', {}, f.text))) : null,
     res.unresolved && res.unresolved.length ? [el('div', { class: 'meta' }, 'Unresolved:'),
       el('ul', { class: 'findings' }, res.unresolved.map((u) => el('li', {}, u)))] : null];
+}
+
+function shotsSection(r) {
+  const last = r.events.filter((e) => ['screenshots', 'screenshots_skipped'].includes(e.type)).pop();
+  if (!last) return null;
+  const head = el('h4', {}, 'Screenshots — before / after');
+  if (last.type === 'screenshots_skipped') return [head, el('div', { class: 'meta' }, `Skipped: ${last.data.reason}`)];
+  const have = new Set(last.data.files);
+  const img = (name, label) => have.has(name)
+    ? el('a', { href: `/api/runs/${encodeURIComponent(r.id)}/shots/${name}`, target: '_blank', rel: 'noopener' },
+        el('img', { src: `/api/runs/${encodeURIComponent(r.id)}/shots/${name}`, alt: label, loading: 'lazy' }))
+    : el('div', { class: 'meta' }, `${label}: not captured`);
+  return [head, last.data.pages.map((page, i) => last.data.widths.map((w) => el('div', { class: 'shots' },
+    el('div', { class: 'meta' }, `${page} · ${w}px`),
+    el('div', { class: 'pair' }, el('figure', {}, el('figcaption', { class: 'meta' }, 'Before'), img(`before-${i}-${w}.png`, `Before ${page} at ${w}px`)),
+      el('figure', {}, el('figcaption', { class: 'meta' }, 'After'), img(`after-${i}-${w}.png`, `After ${page} at ${w}px`))))))];
 }
 
 function reviseForm(r) {
@@ -243,6 +260,8 @@ function eventText(e) {
   if (e.type === 'reviewed') return `${d.reviewer}: ${(d.result && d.result.summary || '').slice(0, 80)}`;
   if (e.type === 'review_skipped') return d.reason;
   if (e.type === 'revision_queued') return `next attempt ${d.next}`;
+  if (e.type === 'screenshots') return `${d.files.length} screenshot(s)`;
+  if (e.type === 'screenshots_skipped') return d.reason;
   return '';
 }
 

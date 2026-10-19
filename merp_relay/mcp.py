@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from . import ops, release
+from . import ops, release, shots
 from .ledger import Ledger
 from .server import pools, run_summary
 
@@ -122,6 +122,7 @@ def t_report(ledger, args):
                 'findings': [f['text'] for f in result.get('findings', [])],
                 'provenance': 'worker_reported'} if result else None,
             'review': _review(ledger, run['id']),
+            'screenshots': shots.files(ledger, run['id']) or None,
             'approval_blockers': approval_blockers(ledger, run) if run['status'] == 'needs_approval' else None,
             'diff': diff[:MAX_DIFF], 'diff_truncated': len(diff) > MAX_DIFF}
 
