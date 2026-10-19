@@ -75,7 +75,9 @@ def t_workers(ledger, args):
             'models': ops.models(), 'quota': pools(), 'preference': ops.PREFERENCE,
             'slots': int(ledger.setting('slots') or ops.SLOTS),
             'per_worker': int(ledger.setting('per_worker') or ops.PER_WORKER),
-            'runner_active': ops.runner_active(), 'routing_paused': ops.paused(ledger)}
+            'runner_active': ops.runner_active(), 'routing_paused': ops.paused(ledger),
+            'caps': {w: ledger.setting(f'cap.{w}') for w in ('codex', 'claude') if ledger.setting(f'cap.{w}')},
+            'capped_now': ops.capped(ledger, fresh=True)}
 
 
 def t_dispatch(ledger, args):
