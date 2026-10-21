@@ -119,7 +119,10 @@ def review(ledger, run_id, objective, artifact, diff, profiles, author):
         execution_mode='snapshot_analysis', input_refs=(artifact.artifact_id,),
         completion_criteria=('Verdict prefix, concrete findings with file references',),
         read_scope=('objective.txt', 'proposed.diff'))
-    reviewers = {k: v for k, v in profiles.items() if k != author}
+    held = capped(ledger)
+    reviewers = {k: v for k, v in profiles.items() if k != author and k not in held}
+    if not reviewers and held:
+        return ledger.event(run_id, 'review_skipped', reason='reviewer ' + '; '.join(held.values()))
     decision = route(task, [p for _, p in reviewers.values()], observations(), [], PREFERENCE,
                      datetime.now(timezone.utc), 'ops-review', contained=True)
     if not decision.selected:
@@ -129,6 +132,37 @@ def review(ledger, run_id, objective, artifact, diff, profiles, author):
                                       lambda: ledger.status(run_id) == 'cancel_requested')
     ledger.event(run_id, 'reviewed', reviewer=decision.selected, result=result.model_dump(mode='json'),
                  metrics=metrics)
+
+
+SHORT_WINDOWS = ('five_hour', '300m')
+CAP_READERS = {'claude': lambda: claude_observation(), 'codex': lambda: codex_observation()}
+_cap_cache = {}
+
+
+def capped(ledger, now=None, fresh=False):
+    """Owner usage caps: setting `cap.<worker>` = the most of its 5-hour window Relay may use (e.g. 0.6).
+    {worker: reason} for capped workers. Unknown usage counts as capped, so a cap is never silently exceeded.
+    Quota files are re-read at most every 30 s per ledger and cap setting."""
+    caps = tuple((w, ledger.setting(f'cap.{w}')) for w in CAP_READERS)
+    caps = tuple((w, v) for w, v in caps if v)
+    if not caps:
+        return {}
+    key = (str(ledger.path), caps)
+    hit = _cap_cache.get(key)
+    if hit and not fresh and time.monotonic() - hit[0] < 30:
+        return hit[1]
+    now = now or datetime.now(timezone.utc)
+    out = {}
+    for name, value in caps:
+        cap = float(value)
+        obs, windows = CAP_READERS[name]()
+        short = [w for w in windows if w['name'] in SHORT_WINDOWS and w['used'] is not None]
+        if obs is None or now >= obs.expires_at or not short:
+            out[name] = f'owner cap {cap:.0%} of the 5-hour window, but current usage is unknown'
+        elif short[0]['used'] >= cap:
+            out[name] = f'owner cap: 5-hour usage {short[0]["used"]:.0%} has reached {cap:.0%}'
+    _cap_cache[key] = (time.monotonic(), out)
+    return out
 
 
 def choose(run, profiles, busy=()):
@@ -305,7 +339,7 @@ def work(ledger, watch=False):
     Pause stops new pickups; runs in flight finish or are cancelled.
     Callers hold RunnerLock (run_forever, `ops work`), so recover() never fails another runner's run."""
     recover(ledger)
-    running, assigned, profiles, seen = {}, {}, None, 0.0
+    running, assigned, profiles, seen, waiting = {}, {}, None, 0.0, set()
     with ThreadPoolExecutor(max_workers=8) as pool:
         while True:
             for run_id in [r for r, f in running.items() if f.done()]:
@@ -328,10 +362,14 @@ def work(ledger, watch=False):
                     continue
                 if profiles is None or time.monotonic() - seen > 60:  # probes spawn CLIs; cache briefly
                     profiles, seen = available_profiles(), time.monotonic()
-                busy = {w for w in profiles if sum(1 for a in assigned.values() if a == w) >= cap}
+                held = capped(ledger)
+                busy = {w for w in profiles if sum(1 for a in assigned.values() if a == w) >= cap} | set(held)
                 decision = choose(run, profiles, busy)
                 if not decision.selected and busy:
-                    continue  # a busy worker may take it later
+                    if held and run_id not in waiting:  # say once why a pinned run is not starting
+                        waiting.add(run_id)
+                        ledger.event(run_id, 'waiting', reason='; '.join(f'{k}: {v}' for k, v in held.items()))
+                    continue  # a busy or capped worker may take it later
                 assigned[run_id] = decision.selected
                 running[run_id] = pool.submit(_run_in_thread, ledger.path, run_id, decision)
                 started += 1
